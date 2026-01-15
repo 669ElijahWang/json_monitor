@@ -1,0 +1,19 @@
+groups:
+  - name: kafka_flow_monitor_rules
+    rules:
+      - alert: HighFailureRate
+        expr: rate(msg_consumed_total{result="FAIL"}[5m]) / rate(msg_consumed_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "消息失败率超过 10%"
+
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, rate(msg_e2e_latency_seconds_bucket[5m])) > 4
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "P95 延迟超过 5 秒"
+

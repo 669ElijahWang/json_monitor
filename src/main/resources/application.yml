@@ -1,0 +1,64 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: kafka-flow-monitor
+  datasource:
+    url: jdbc:h2:mem:monitor;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driverClassName: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+    open-in-view: false
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: latest
+      enable-auto-commit: true
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+monitor:
+  kafka:
+    main:
+      enabled: true
+      group-id: monitor-main-group
+      topic: monitor-topic
+      processed-topic: monitor-topic-processed
+    observer:
+      group-id: monitor-observer-group
+      topics: monitor-topic,monitor-topic-processed
+  latency:
+    timeout-seconds: 5
+  demo:
+    producer:
+      enabled: true
+      topic: monitor-topic
+      rate-ms: 1000
+  alert:
+    rules-path: prometheus/alert-rules.yml
+    prometheus-reload-url: http://localhost:9090/-/reload
+    reload-enabled: true
