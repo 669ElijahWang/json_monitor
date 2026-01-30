@@ -21,6 +21,11 @@ import java.util.concurrent.ThreadLocalRandom;
  * - 写入 result、processedTime
  * - 补齐 transRequest.operDetail.nodeName
  * - 通过 KafkaTemplate 发送到 processed-topic
+ *
+ * 说明：
+ * - @Component：注册为 Spring Bean
+ * - @ConditionalOnProperty：使用配置开关启停主消费者（便于演示/排障）
+ * - @KafkaListener：从主 Topic 消费，并把“处理后的消息”投递到 processed-topic
  */
 @Component
 @ConditionalOnProperty(prefix = "monitor.kafka.main", name = "enabled", havingValue = "true")
@@ -55,14 +60,16 @@ public class MainBusinessConsumer {
                 // 尝试从消息体中补齐 taskId
                 taskId = root.path("taskId").asText();
             }
+            long internalMs = ThreadLocalRandom.current().nextLong(100, 1001);
+            Thread.sleep(internalMs);
 
-            // 模拟业务处理耗时 50~350ms
-            Thread.sleep(ThreadLocalRandom.current().nextInt(50, 350));
+            long processedMs = Instant.now().toEpochMilli();
 
             // 构造输出 JSON，写入处理结果与时间戳
             ObjectNode out = (root.isObject() ? (ObjectNode) root : objectMapper.createObjectNode());
             out.put("result", ThreadLocalRandom.current().nextInt(100) < 90 ? "SUCCESS" : "FAIL");
-            out.put("processedTime", Instant.now().toEpochMilli());
+            out.put("processedTime", processedMs);
+            out.put("internalSeconds", internalMs / 1000.0);
 
             // 补齐链路中的 nodeName（模拟节点变更）
             JsonNode transRequest = out.path("transRequest");

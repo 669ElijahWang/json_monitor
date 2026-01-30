@@ -1,0 +1,16 @@
+spring:
+  config:
+    activate:
+      on-profile: prod
+  kafka:
+    bootstrap-servers: ${KAFKA_SERVERS:localhost:9092}
+monitor:
+  kafka:
+    observer:
+      topics: ${MONITOR_TOPIC:monitor-topic}
+      group-id: ${MONITOR_GROUP_ID:monitor-observer-group}
+  prometheus:
+    base-url: ${PROMETHEUS_URL:http://prometheus:9090}
+  alert:
+    rules-path: /etc/monitor/alert-rules.yml
+    prometheus-reload-url: ${PROMETHEUS_RELOAD_URL:http://prometheus:9090/-/reload}

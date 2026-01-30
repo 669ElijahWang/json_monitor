@@ -1,6 +1,17 @@
 package com.monitor.service;
 
+/**
+ * 解析后的消息对象，支持两种消息类型：
+ * 1. STATE 类型（state/开头）- Kafka消息接收状态
+ * - watchState: 0=待处理, 1=获取, 2=处理中, 4=处理失败, 5=处理完成
+ * 2. AGENT 类型（AGENT/开头）- 业务流程节点状态
+ * - systemState: WaitForCheckOut, WaitForApply, Running, Suspend, Complete,
+ * Terminate, Revoke
+ * - workitemState: 1=初始化, 2=待处理, 4=处理中, 5=挂起, 6=完成, 7=已终止
+ */
 public class ParsedMessage {
+    /** 消息类型：STATE/AGENT/UNKNOWN */
+    private final String messageType;
     private final String taskId;
     private final String tenant;
     private final String systemNo;
@@ -10,16 +21,54 @@ public class ParsedMessage {
     private final String busVer;
     private final String result;
     private final Long produceTimeMs;
+    private final Long processedTimeMs;
+    private final Double internalSeconds;
 
-    public ParsedMessage(String taskId,
-                         String tenant,
-                         String systemNo,
-                         String adviseKey,
-                         String nodeName,
-                         String busId,
-                         String busVer,
-                         String result,
-                         Long produceTimeMs) {
+    // STATE消息特有字段
+    /** Kafka消息接收状态：0=待处理, 1=获取, 2=处理中, 4=处理失败, 5=处理完成 */
+    private final String watchState;
+    private final String serverIp;
+    private final String processId;
+    private final String workitemId;
+    private final String transNo;
+
+    // AGENT消息特有字段
+    /**
+     * SystemInfo状态：WaitForCheckOut, WaitForApply, Running, Suspend, Complete,
+     * Terminate, Revoke
+     */
+    private final String systemState;
+    /** operDetail.workitemstate：1=初始化, 2=待处理, 4=处理中, 5=挂起, 6=完成, 7=已终止 */
+    private final String workitemState;
+    private final String userNo;
+    private final String startTime;
+    private final String checkOutTime;
+    private final String checkInTime;
+
+    public ParsedMessage(String messageType,
+            String taskId,
+            String tenant,
+            String systemNo,
+            String adviseKey,
+            String nodeName,
+            String busId,
+            String busVer,
+            String result,
+            Long produceTimeMs,
+            Long processedTimeMs,
+            Double internalSeconds,
+            String watchState,
+            String serverIp,
+            String processId,
+            String workitemId,
+            String transNo,
+            String systemState,
+            String workitemState,
+            String userNo,
+            String startTime,
+            String checkOutTime,
+            String checkInTime) {
+        this.messageType = messageType;
         this.taskId = taskId;
         this.tenant = tenant;
         this.systemNo = systemNo;
@@ -29,6 +78,23 @@ public class ParsedMessage {
         this.busVer = busVer;
         this.result = result;
         this.produceTimeMs = produceTimeMs;
+        this.processedTimeMs = processedTimeMs;
+        this.internalSeconds = internalSeconds;
+        this.watchState = watchState;
+        this.serverIp = serverIp;
+        this.processId = processId;
+        this.workitemId = workitemId;
+        this.transNo = transNo;
+        this.systemState = systemState;
+        this.workitemState = workitemState;
+        this.userNo = userNo;
+        this.startTime = startTime;
+        this.checkOutTime = checkOutTime;
+        this.checkInTime = checkInTime;
+    }
+
+    public String getMessageType() {
+        return messageType;
     }
 
     public String getTaskId() {
@@ -66,5 +132,147 @@ public class ParsedMessage {
     public Long getProduceTimeMs() {
         return produceTimeMs;
     }
-}
 
+    public Long getProcessedTimeMs() {
+        return processedTimeMs;
+    }
+
+    public Double getInternalSeconds() {
+        return internalSeconds;
+    }
+
+    public String getWatchState() {
+        return watchState;
+    }
+
+    public String getServerIp() {
+        return serverIp;
+    }
+
+    public String getProcessId() {
+        return processId;
+    }
+
+    public String getWorkitemId() {
+        return workitemId;
+    }
+
+    public String getTransNo() {
+        return transNo;
+    }
+
+    public String getSystemState() {
+        return systemState;
+    }
+
+    public String getWorkitemState() {
+        return workitemState;
+    }
+
+    public String getUserNo() {
+        return userNo;
+    }
+
+    public String getStartTime() {
+        return startTime;
+    }
+
+    public String getCheckOutTime() {
+        return checkOutTime;
+    }
+
+    public String getCheckInTime() {
+        return checkInTime;
+    }
+
+    /**
+     * 获取watchState的中文描述
+     */
+    public String getWatchStateDesc() {
+        if (watchState == null)
+            return null;
+        switch (watchState) {
+            case "0":
+                return "待处理";
+            case "1":
+                return "获取";
+            case "2":
+                return "处理中";
+            case "4":
+                return "处理失败";
+            case "5":
+                return "处理完成";
+            default:
+                return watchState;
+        }
+    }
+
+    /**
+     * 获取workitemState的中文描述
+     */
+    public String getWorkitemStateDesc() {
+        if (workitemState == null)
+            return null;
+        switch (workitemState) {
+            case "1":
+                return "初始化";
+            case "2":
+                return "待处理";
+            case "4":
+                return "处理中";
+            case "5":
+                return "挂起";
+            case "6":
+                return "完成";
+            case "7":
+                return "已终止";
+            default:
+                return workitemState;
+        }
+    }
+
+    /**
+     * 将时间字符串(yyyyMMddHHmmss格式)转换为毫秒时间戳
+     */
+    private static Long parseTimeString(String timeStr) {
+        if (timeStr == null || timeStr.length() != 14) {
+            return null;
+        }
+        try {
+            int year = Integer.parseInt(timeStr.substring(0, 4));
+            int month = Integer.parseInt(timeStr.substring(4, 6));
+            int day = Integer.parseInt(timeStr.substring(6, 8));
+            int hour = Integer.parseInt(timeStr.substring(8, 10));
+            int minute = Integer.parseInt(timeStr.substring(10, 12));
+            int second = Integer.parseInt(timeStr.substring(12, 14));
+
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            cal.set(year, month - 1, day, hour, minute, second);
+            cal.set(java.util.Calendar.MILLISECOND, 0);
+            return cal.getTimeInMillis();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 获取startTime的毫秒时间戳
+     */
+    public Long getStartTimeMs() {
+        return parseTimeString(startTime);
+    }
+
+    /**
+     * 获取checkOutTime的毫秒时间戳
+     */
+    public Long getCheckOutTimeMs() {
+        return parseTimeString(checkOutTime);
+    }
+
+    /**
+     * 获取checkInTime的毫秒时间戳
+     */
+    public Long getCheckInTimeMs() {
+        return parseTimeString(checkInTime);
+    }
+}

@@ -12,6 +12,8 @@ public class MessageParserTest {
                 "  \"taskId\": \"t-001\",\n" +
                 "  \"adviseKey\": \"ORDER_CREATE\",\n" +
                 "  \"produceTime\": 1700000000000,\n" +
+                "  \"processedTime\": 1700000004000,\n" +
+                "  \"internalSeconds\": 4,\n" +
                 "  \"transRequest\": {\n" +
                 "    \"systemNo\": \"SYS-A\",\n" +
                 "    \"operDetail\": {\"nodeName\": \"node-1\"},\n" +
@@ -32,6 +34,7 @@ public class MessageParserTest {
         Assertions.assertEquals("v1", msg.getBusVer());
         Assertions.assertEquals("SUCCESS", msg.getResult());
         Assertions.assertEquals(1700000000000L, msg.getProduceTimeMs());
+        Assertions.assertEquals(1700000004000L, msg.getProcessedTimeMs());
+        Assertions.assertEquals(4.0, msg.getInternalSeconds());
     }
 }
-

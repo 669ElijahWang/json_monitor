@@ -1,0 +1,32 @@
+hostPort: kafka:9999
+ssl: false
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  - pattern: 'kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(.+)><>Mean'
+    name: kafka_network_requestmetrics_totallatency_ms
+    type: GAUGE
+    labels:
+      request: "$1"
+
+  - pattern: 'kafka.network<type=SocketServer, name=NetworkProcessorAvgIdlePercent, networkProcessor=(.+)><>Value'
+    name: kafka_network_processoridletime_avg
+    type: GAUGE
+    labels:
+      network_processor: "$1"
+
+  - pattern: 'kafka.network<type=SocketServer, name=NetworkProcessorAvgIdlePercent><>Value'
+    name: kafka_network_processoridletime_avg
+    type: GAUGE
+
+  - pattern: 'kafka.server<type=ReplicaManager, name=UnderReplicatedPartitions><>Value'
+    name: kafka_server_replicamanager_underreplicatedpartitions
+    type: GAUGE
+
+  - pattern: 'kafka.controller<type=KafkaController, name=ActiveControllerCount><>Value'
+    name: kafka_controller_kafkacontroller_activecontrollercount
+    type: GAUGE
+
+  - pattern: 'kafka.server<type=ReplicaManager, name=IsrShrinksPerSec><>Count'
+    name: kafka_controller_kafkacontroller_isrshrinks_total
+    type: COUNTER

@@ -1,0 +1,144 @@
+global:
+  # SMTP 服务器配置
+  smtp_smarthost: 'smtp.example.com:587'  # 修改为你的 SMTP 服务器地址和端口
+  smtp_from: 'alertmanager@example.com'    # 修改为发件人邮箱
+  smtp_auth_username: 'your-email@example.com'  # 修改为 SMTP 认证用户名
+  smtp_auth_password: 'your-password'      # 修改为 SMTP 认证密码
+  smtp_require_tls: true
+
+# 告警路由配置
+route:
+  # 默认接收者
+  receiver: 'email-notifications'
+  
+  # 分组配置：相同告警类型会被分组在一起
+  group_by: ['alertname', 'severity']
+  
+  # 分组等待时间：收到第一个告警后等待 10 秒，看是否有更多相同类型的告警
+  group_wait: 10s
+  
+  # 分组间隔：已发送的分组，再次发送前至少等待 5 分钟
+  group_interval: 5m
+  
+  # 重复发送间隔：同一告警如果持续触发，每 3 小时重复发送一次
+  repeat_interval: 3h
+
+  # 子路由：根据告警级别进行不同处理
+  routes:
+    # 严重告警：立即发送，不分组等待
+    - match:
+        severity: critical
+      receiver: 'email-critical'
+      group_wait: 0s
+      repeat_interval: 1h
+    
+    # 警告级别：使用默认配置
+    - match:
+        severity: warning
+      receiver: 'email-notifications'
+
+# 接收者配置
+receivers:
+  # 普通告警邮件接收者
+  - name: 'email-notifications'
+    email_configs:
+      - to: 'team@example.com'  # 修改为接收告警的邮箱地址
+        headers:
+          Subject: '[Kafka 监控] {{ .GroupLabels.alertname }} 告警'
+        html: |
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; }
+              .alert-box { border: 2px solid #ff9800; padding: 15px; margin: 10px 0; border-radius: 5px; }
+              .critical { border-color: #f44336; background-color: #ffebee; }
+              .warning { border-color: #ff9800; background-color: #fff3e0; }
+              .info { border-color: #2196f3; background-color: #e3f2fd; }
+              h2 { margin-top: 0; }
+              .label { display: inline-block; padding: 3px 8px; margin: 2px; background-color: #e0e0e0; border-radius: 3px; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <h1>🚨 Kafka 流量监控告警</h1>
+            <p><strong>告警时间:</strong> {{ .CommonAnnotations.summary }}</p>
+            
+            {{ range .Alerts }}
+            <div class="alert-box {{ .Labels.severity }}">
+              <h2>{{ .Labels.alertname }}</h2>
+              <p><strong>级别:</strong> <span class="label">{{ .Labels.severity }}</span></p>
+              <p><strong>摘要:</strong> {{ .Annotations.summary }}</p>
+              {{ if .Annotations.description }}
+              <p><strong>详情:</strong> {{ .Annotations.description }}</p>
+              {{ end }}
+              <p><strong>开始时间:</strong> {{ .StartsAt.Format "2006-01-02 15:04:05" }}</p>
+              {{ if .Labels.topic }}
+              <p><strong>Topic:</strong> {{ .Labels.topic }}</p>
+              {{ end }}
+              {{ if .Labels.groupId }}
+              <p><strong>Group ID:</strong> {{ .Labels.groupId }}</p>
+              {{ end }}
+            </div>
+            {{ end }}
+            
+            <hr>
+            <p style="color: #666; font-size: 12px;">
+              此邮件由 Kafka 流量监控系统自动发送，请勿直接回复。
+            </p>
+          </body>
+          </html>
+
+  # 严重告警邮件接收者（可配置不同的收件人）
+  - name: 'email-critical'
+    email_configs:
+      - to: 'oncall@example.com'  # 修改为紧急联系人邮箱
+        headers:
+          Subject: '🔴 [紧急] Kafka 严重告警 - {{ .GroupLabels.alertname }}'
+        html: |
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; }
+              .alert-box { border: 3px solid #f44336; padding: 20px; margin: 10px 0; border-radius: 5px; background-color: #ffebee; }
+              h1 { color: #d32f2f; }
+              .label { display: inline-block; padding: 5px 10px; margin: 2px; background-color: #f44336; color: white; border-radius: 3px; font-weight: bold; }
+            </style>
+          </head>
+          <body>
+            <h1>🔴 严重告警 - 需要立即处理</h1>
+            
+            {{ range .Alerts }}
+            <div class="alert-box">
+              <h2>{{ .Labels.alertname }}</h2>
+              <p><span class="label">CRITICAL</span></p>
+              <p><strong>摘要:</strong> {{ .Annotations.summary }}</p>
+              {{ if .Annotations.description }}
+              <p><strong>详情:</strong> {{ .Annotations.description }}</p>
+              {{ end }}
+              <p><strong>开始时间:</strong> {{ .StartsAt.Format "2006-01-02 15:04:05" }}</p>
+              
+              <h3>相关信息:</h3>
+              <ul>
+                {{ range $key, $value := .Labels }}
+                <li><strong>{{ $key }}:</strong> {{ $value }}</li>
+                {{ end }}
+              </ul>
+            </div>
+            {{ end }}
+            
+            <hr>
+            <p style="color: #d32f2f; font-weight: bold;">
+              ⚠️ 这是一个严重级别的告警，请立即检查 Kafka 集群状态！
+            </p>
+          </body>
+          </html>
+
+# 抑制规则：避免重复告警
+inhibit_rules:
+  # 如果有严重告警，抑制相同来源的警告级别告警
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'topic', 'groupId']

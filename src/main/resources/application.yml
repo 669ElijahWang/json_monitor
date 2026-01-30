@@ -4,22 +4,6 @@ server:
 spring:
   application:
     name: kafka-flow-monitor
-  datasource:
-    url: jdbc:h2:mem:monitor;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driverClassName: org.h2.Driver
-    username: sa
-    password:
-  jpa:
-    hibernate:
-      ddl-auto: update
-    properties:
-      hibernate:
-        format_sql: true
-    open-in-view: false
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
 
   kafka:
     bootstrap-servers: localhost:9092
@@ -40,11 +24,26 @@ management:
   endpoint:
     health:
       show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        msg_e2e_latency_seconds: true
+        msg_lag_latency_seconds: true
+        msg_internal_latency_seconds: true
+        msg_size_bytes: true
 
 monitor:
+  message:
+    big-threshold-bytes: 1048576
+    big-trace-max: 200
+  prometheus:
+    base-url: http://localhost:9090
+    task-metrics-enabled: true
+    task-metrics-max-series: 5000
   kafka:
     main:
-      enabled: true
+      enabled: false  
+      # enabled: true
       group-id: monitor-main-group
       topic: monitor-topic
       processed-topic: monitor-topic-processed
@@ -52,10 +51,11 @@ monitor:
       group-id: monitor-observer-group
       topics: monitor-topic,monitor-topic-processed
   latency:
-    timeout-seconds: 5
+    timeout-seconds: 0.8
   demo:
     producer:
-      enabled: true
+      # enabled: true
+      enabled: false
       topic: monitor-topic
       rate-ms: 1000
   alert:

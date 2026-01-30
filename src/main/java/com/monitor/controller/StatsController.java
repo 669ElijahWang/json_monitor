@@ -1,6 +1,5 @@
 package com.monitor.controller;
 
-import com.monitor.repository.StoredMessageRepository;
 import com.monitor.service.StatsService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -17,11 +16,9 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/stats")
 public class StatsController {
-    private final StoredMessageRepository repository;
     private final StatsService stats;
 
-    public StatsController(StoredMessageRepository repository, StatsService stats) {
-        this.repository = repository;
+    public StatsController(StatsService stats) {
         this.stats = stats;
     }
 
@@ -37,12 +34,27 @@ public class StatsController {
 
     @GetMapping("/breakdown")
     public List<Map<String, Object>> breakdown(@RequestParam(defaultValue = "60") int minutes,
-                                               @RequestParam(defaultValue = "tenant") String by) {
+            @RequestParam(defaultValue = "tenant") String by) {
         return stats.breakdown(minutes, by);
     }
 
     @GetMapping("/latency")
     public Map<String, Object> latency(@RequestParam(defaultValue = "60") int minutes) {
         return stats.latency(minutes);
+    }
+
+    @GetMapping("/message-size")
+    public Map<String, Object> messageSize(@RequestParam(defaultValue = "60") int minutes) {
+        return stats.messageSizeDistribution(minutes);
+    }
+
+    @GetMapping("/big-messages")
+    public Map<String, Object> bigMessages(@RequestParam(defaultValue = "50") int limit) {
+        return stats.bigMessages(limit);
+    }
+
+    @GetMapping("/state-stats")
+    public Map<String, Object> stateStats(@RequestParam(defaultValue = "60") int minutes) {
+        return stats.stateStats(minutes);
     }
 }

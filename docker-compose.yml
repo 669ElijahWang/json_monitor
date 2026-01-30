@@ -24,6 +24,23 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_JMX_PORT: 9999
+      KAFKA_JMX_HOSTNAME: kafka
+      KAFKA_JMX_OPTS: "-Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=kafka -Dcom.sun.management.jmxremote.rmi.port=9999"
+
+  kafka-jmx-exporter:
+    image: sscaling/jmx-prometheus-exporter
+    depends_on:
+      - kafka
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./prometheus/kafka-jmx-exporter.yml:/opt/jmx_exporter/config.yml:ro
+
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    ports:
+      - "9100:9100"
 
   prometheus:
     image: prom/prometheus:v2.51.2
@@ -40,6 +57,10 @@ services:
     image: prom/alertmanager:v0.27.0
     ports:
       - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
 
   grafana:
     image: grafana/grafana:10.4.2
