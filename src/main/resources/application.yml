@@ -49,7 +49,7 @@ monitor:
       processed-topic: monitor-topic-processed
     observer:
       group-id: monitor-observer-group
-      topics: monitor-topic,monitor-topic-processed
+      topics: state,SUNYARD,AGENT,competence
   latency:
     timeout-seconds: 0.8
   demo:

@@ -39,6 +39,13 @@
       <el-table :data="rows" row-key="id" style="width: 100%">
         <el-table-column prop="createdAt" label="时间" width="210" :formatter="formatLocalCell" />
         <el-table-column prop="taskId" label="taskId" width="200" />
+        <el-table-column label="种类" width="120">
+          <template #default="{ row }">
+            <el-tag :type="getCategoryTagType(row.category)" size="small">
+              {{ row.category || 'unknown' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="tenant" label="租户" width="120" />
         <el-table-column prop="systemNo" label="系统" width="120" />
         <el-table-column prop="nodeName" label="节点" width="160" />
@@ -96,6 +103,20 @@ function formatLocal(iso) {
 
 function formatLocalCell(row, column, cellValue) {
   return formatLocal(cellValue);
+}
+
+/**
+ * 根据消息种类返回对应的标签颜色类型
+ * @param category 消息种类 (state/competence/SUNYARD/AGENT等)
+ */
+function getCategoryTagType(category) {
+  if (!category) return "info";
+  const cat = category.toLowerCase();
+  if (cat === "state") return "";          // 默认蓝色
+  if (cat === "competence") return "danger"; // 红色 - 异常
+  if (cat === "sunyard") return "success";   // 绿色 - SUNYARD租户
+  if (cat === "agent") return "warning";     // 橙色 - AGENT租户
+  return "info"; // 灰色 - 其他
 }
 
 async function load() {

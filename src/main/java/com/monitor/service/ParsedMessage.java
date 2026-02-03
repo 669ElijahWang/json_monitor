@@ -1,17 +1,21 @@
 package com.monitor.service;
 
 /**
- * 解析后的消息对象，支持两种消息类型：
+ * 解析后的消息对象，支持多种消息类型：
  * 1. STATE 类型（state/开头）- Kafka消息接收状态
  * - watchState: 0=待处理, 1=获取, 2=处理中, 4=处理失败, 5=处理完成
- * 2. AGENT 类型（AGENT/开头）- 业务流程节点状态
+ * 2. COMPETENCE 类型（competence/开头）- 异常消息
+ * - errorCode, errorType, errorLevel, errorInfo, errorInterface
+ * 3. TENANT_MESSAGE 类型（SUNYARD/AGENT/其他租户开头）- 租户业务消息
  * - systemState: WaitForCheckOut, WaitForApply, Running, Suspend, Complete,
  * Terminate, Revoke
  * - workitemState: 1=初始化, 2=待处理, 4=处理中, 5=挂起, 6=完成, 7=已终止
  */
 public class ParsedMessage {
-    /** 消息类型：STATE/AGENT/UNKNOWN */
+    /** 消息类型：STATE/COMPETENCE/TENANT_MESSAGE/UNKNOWN */
     private final String messageType;
+    /** 消息种类：从key前缀提取，如 state/competence/SUNYARD/AGENT 等 */
+    private final String category;
     private final String taskId;
     private final String tenant;
     private final String systemNo;
@@ -32,7 +36,14 @@ public class ParsedMessage {
     private final String workitemId;
     private final String transNo;
 
-    // AGENT消息特有字段
+    // COMPETENCE消息特有字段（异常）
+    private final String errorCode;
+    private final String errorType;
+    private final String errorLevel;
+    private final String errorInfo;
+    private final String errorInterface;
+
+    // TENANT_MESSAGE消息特有字段（租户消息）
     /**
      * SystemInfo状态：WaitForCheckOut, WaitForApply, Running, Suspend, Complete,
      * Terminate, Revoke
@@ -46,6 +57,7 @@ public class ParsedMessage {
     private final String checkInTime;
 
     public ParsedMessage(String messageType,
+            String category,
             String taskId,
             String tenant,
             String systemNo,
@@ -62,6 +74,11 @@ public class ParsedMessage {
             String processId,
             String workitemId,
             String transNo,
+            String errorCode,
+            String errorType,
+            String errorLevel,
+            String errorInfo,
+            String errorInterface,
             String systemState,
             String workitemState,
             String userNo,
@@ -69,6 +86,7 @@ public class ParsedMessage {
             String checkOutTime,
             String checkInTime) {
         this.messageType = messageType;
+        this.category = category;
         this.taskId = taskId;
         this.tenant = tenant;
         this.systemNo = systemNo;
@@ -85,6 +103,11 @@ public class ParsedMessage {
         this.processId = processId;
         this.workitemId = workitemId;
         this.transNo = transNo;
+        this.errorCode = errorCode;
+        this.errorType = errorType;
+        this.errorLevel = errorLevel;
+        this.errorInfo = errorInfo;
+        this.errorInterface = errorInterface;
         this.systemState = systemState;
         this.workitemState = workitemState;
         this.userNo = userNo;
@@ -95,6 +118,10 @@ public class ParsedMessage {
 
     public String getMessageType() {
         return messageType;
+    }
+
+    public String getCategory() {
+        return category;
     }
 
     public String getTaskId() {
@@ -159,6 +186,26 @@ public class ParsedMessage {
 
     public String getTransNo() {
         return transNo;
+    }
+
+    public String getErrorCode() {
+        return errorCode;
+    }
+
+    public String getErrorType() {
+        return errorType;
+    }
+
+    public String getErrorLevel() {
+        return errorLevel;
+    }
+
+    public String getErrorInfo() {
+        return errorInfo;
+    }
+
+    public String getErrorInterface() {
+        return errorInterface;
     }
 
     public String getSystemState() {

@@ -45,15 +45,17 @@ public class MessageObserverConsumer {
         ParsedMessage parsed = parser.parse(key, rawJson);
 
         String messageType = parsed.getMessageType();
+        String category = parsed.getCategory();
 
-        // 只统计 STATE 和 AGENT 类型消息，忽略 UNKNOWN 类型
+        // 只统计已知类型消息，忽略 UNKNOWN 类型
         if ("UNKNOWN".equals(messageType)) {
             // UNKNOWN 类型消息不统计（不是我们监控的格式）
             return;
         }
 
-        // 按消息类型和状态统计
+        // 按消息类型、种类和状态统计
         metrics.incByMessageType(messageType, parsed.getTenant(), parsed.getResult());
+        metrics.incByCategory(category, parsed.getTenant(), parsed.getResult());
         metrics.incProduced(parsed.getTenant(), parsed.getSystemNo(), parsed.getAdviseKey());
         metrics.incConsumed(parsed.getTenant(), parsed.getSystemNo(), parsed.getResult(), parsed.getNodeName());
 
@@ -62,8 +64,18 @@ public class MessageObserverConsumer {
             metrics.incByWatchState(parsed.getTenant(), parsed.getWatchState());
         }
 
-        // AGENT类型消息按systemState和workitemState统计（业务流程状态）
-        if ("AGENT".equals(messageType)) {
+        // COMPETENCE类型消息按errorType和errorLevel统计（异常消息）
+        if ("COMPETENCE".equals(messageType)) {
+            if (parsed.getErrorType() != null) {
+                metrics.incByErrorType(parsed.getTenant(), parsed.getErrorType());
+            }
+            if (parsed.getErrorLevel() != null) {
+                metrics.incByErrorLevel(parsed.getTenant(), parsed.getErrorLevel());
+            }
+        }
+
+        // TENANT_MESSAGE类型消息按systemState和workitemState统计（租户业务消息）
+        if ("TENANT_MESSAGE".equals(messageType)) {
             if (parsed.getSystemState() != null) {
                 metrics.incBySystemState(parsed.getTenant(), parsed.getSystemNo(), parsed.getSystemState());
             }

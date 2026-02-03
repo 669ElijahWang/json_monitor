@@ -20,6 +20,8 @@ public class MessageParser {
 
     public static final String MSG_TYPE_STATE = "STATE";
     public static final String MSG_TYPE_AGENT = "AGENT";
+    public static final String MSG_TYPE_COMPETENCE = "COMPETENCE";
+    public static final String MSG_TYPE_TENANT_MESSAGE = "TENANT_MESSAGE";
     public static final String MSG_TYPE_UNKNOWN = "UNKNOWN";
 
     public MessageParser(ObjectMapper objectMapper) {
@@ -28,6 +30,9 @@ public class MessageParser {
 
     /**
      * 根据消息key判断消息类型
+     * - state/ 开头 -> STATE（状态消息）
+     * - competence/ 开头 -> COMPETENCE（异常消息）
+     * - SUNYARD/ / AGENT/ / 其他租户开头 -> TENANT_MESSAGE（租户消息）
      */
     public String detectMessageType(String key) {
         if (key == null || key.isBlank()) {
@@ -36,10 +41,40 @@ public class MessageParser {
         if (key.startsWith("state/")) {
             return MSG_TYPE_STATE;
         }
-        if (key.startsWith("AGENT/")) {
-            return MSG_TYPE_AGENT;
+        if (key.startsWith("competence/")) {
+            return MSG_TYPE_COMPETENCE;
+        }
+        // SUNYARD/AGENT/其他租户开头的都是租户消息
+        if (key.startsWith("AGENT/") || key.startsWith("SUNYARD/") || isTenantMessage(key)) {
+            return MSG_TYPE_TENANT_MESSAGE;
         }
         return MSG_TYPE_UNKNOWN;
+    }
+
+    /**
+     * 判断是否为租户消息（以大写字母开头，包含斜杠的key）
+     */
+    private boolean isTenantMessage(String key) {
+        if (key.isEmpty()) {
+            return false;
+        }
+        char first = key.charAt(0);
+        return Character.isUpperCase(first) && key.contains("/");
+    }
+
+    /**
+     * 从消息key中提取种类名称
+     * 返回第一个斜杠之前的部分
+     */
+    public String extractCategory(String key) {
+        if (key == null || key.isBlank()) {
+            return "unknown";
+        }
+        int slashIndex = key.indexOf('/');
+        if (slashIndex > 0) {
+            return key.substring(0, slashIndex);
+        }
+        return key;
     }
 
     /**
@@ -47,20 +82,23 @@ public class MessageParser {
      */
     public ParsedMessage parse(String key, String rawJson) {
         String messageType = detectMessageType(key);
+        String category = extractCategory(key);
 
         try {
             JsonNode root = objectMapper.readTree(rawJson);
 
             if (MSG_TYPE_STATE.equals(messageType)) {
-                return parseStateMessage(root);
-            } else if (MSG_TYPE_AGENT.equals(messageType)) {
-                return parseAgentMessage(root);
+                return parseStateMessage(root, category);
+            } else if (MSG_TYPE_COMPETENCE.equals(messageType)) {
+                return parseCompetenceMessage(root, category);
+            } else if (MSG_TYPE_TENANT_MESSAGE.equals(messageType)) {
+                return parseTenantMessage(root, category);
             } else {
                 // 兼容旧格式
-                return parseLegacyMessage(root);
+                return parseLegacyMessage(root, category);
             }
         } catch (Exception e) {
-            return createErrorMessage(messageType);
+            return createErrorMessage(messageType, category);
         }
     }
 
@@ -70,7 +108,7 @@ public class MessageParser {
      * 示例:
      * state/SUNYARDBP26011515382155320260129180226778644436/59bcec04-b73a-443f-a186-a20297e705e5
      */
-    private ParsedMessage parseStateMessage(JsonNode root) {
+    private ParsedMessage parseStateMessage(JsonNode root, String category) {
         String taskId = text(root, "taskId");
         String tenant = text(root, "tenant");
         String transNo = text(root, "transNo");
@@ -85,6 +123,7 @@ public class MessageParser {
 
         return new ParsedMessage(
                 MSG_TYPE_STATE,
+                category,
                 safe(taskId, "UNKNOWN"),
                 tenant,
                 null, // systemNo
@@ -101,6 +140,7 @@ public class MessageParser {
                 processId,
                 workitemId,
                 transNo,
+                null, null, null, null, null, // errorCode, errorType, errorLevel, errorInfo, errorInterface
                 null, // systemState
                 null, // workitemState
                 null, // userNo
@@ -111,12 +151,69 @@ public class MessageParser {
     }
 
     /**
-     * 解析 AGENT 类型消息（业务流程节点状态）
-     * key格式: AGENT/{taskId}/{transNo}/{partition}/{workitemId}/{uuid}
+     * 解析 COMPETENCE 类型消息（异常消息）
+     * key格式: competence/{taskId}/{uuid}
+     * 示例:
+     * competence/SUNYARDBP26011515382155320260127180033346625608/e62a7970-140a-4ef2-8660-f8e317a3a30b
+     */
+    private ParsedMessage parseCompetenceMessage(JsonNode root, String category) {
+        String errorBusId = text(root, "errorBusId");
+        String errorStartTime = text(root, "errorStartTime");
+        String errorCode = text(root, "errorCode");
+        String errorType = text(root, "errorType");
+        String errorTaskId = text(root, "errorTaskId");
+        String errorApp = text(root, "errorApp");
+        String errorLevel = text(root, "errorLevel");
+        String errorState = text(root, "errorState");
+        String errorInfo = text(root, "errorInfo");
+        String errorInterface = text(root, "errorInterface");
+        String errorEtcdKey = text(root, "errorEtcdKey");
+        String serverIp = text(root, "serverIp");
+
+        // 根据errorLevel决定result
+        String result = mapErrorLevelToResult(errorLevel);
+
+        return new ParsedMessage(
+                MSG_TYPE_COMPETENCE,
+                category,
+                safe(errorTaskId, "UNKNOWN"),
+                errorApp, // tenant
+                null, // systemNo
+                null, // adviseKey
+                null, // nodeName
+                errorBusId, // busId
+                null, // busVer
+                result,
+                null, // produceTimeMs
+                null, // processedTimeMs
+                null, // internalSeconds
+                null, // watchState
+                serverIp,
+                null, // processId
+                null, // workitemId
+                null, // transNo
+                errorCode,
+                errorType,
+                errorLevel,
+                errorInfo,
+                errorInterface,
+                null, // systemState
+                null, // workitemState
+                null, // userNo
+                null, // startTime
+                null, // checkOutTime
+                null // checkInTime
+        );
+    }
+
+    /**
+     * 解析 TENANT_MESSAGE 类型消息（租户业务消息）
+     * key格式: {TENANT}/{taskId}/{transNo}/{partition}/{workitemId}/{uuid}
      * 示例:
      * AGENT/SUNYARDBP26011515382155320260129175254051282744/KAFKA4000/0/5230032/9a11d
+     * SUNYARD/SUNYARDBP26011515382155320260129175254051282744/...
      */
-    private ParsedMessage parseAgentMessage(JsonNode root) {
+    private ParsedMessage parseTenantMessage(JsonNode root, String category) {
         String tenant = text(root, "priTenant");
         String taskId = text(root, "taskId");
         String adviseKey = text(root, "adviseKey");
@@ -156,7 +253,8 @@ public class MessageParser {
         String result = mapAgentStateToResult(systemState, workitemState);
 
         return new ParsedMessage(
-                MSG_TYPE_AGENT,
+                MSG_TYPE_TENANT_MESSAGE,
+                category,
                 safe(taskId, "UNKNOWN"),
                 tenant,
                 systemNo,
@@ -173,6 +271,7 @@ public class MessageParser {
                 processId,
                 workitemId,
                 null, // transNo
+                null, null, null, null, null, // errorCode, errorType, errorLevel, errorInfo, errorInterface
                 systemState,
                 workitemState,
                 userNo,
@@ -184,7 +283,7 @@ public class MessageParser {
     /**
      * 解析旧格式消息（兼容）
      */
-    private ParsedMessage parseLegacyMessage(JsonNode root) {
+    private ParsedMessage parseLegacyMessage(JsonNode root, String category) {
         String tenant = text(root, "priTenant");
         String taskId = text(root, "taskId");
         String adviseKey = text(root, "adviseKey");
@@ -209,6 +308,7 @@ public class MessageParser {
 
         return new ParsedMessage(
                 MSG_TYPE_UNKNOWN,
+                category,
                 safe(taskId, "UNKNOWN"),
                 tenant,
                 systemNo,
@@ -220,8 +320,10 @@ public class MessageParser {
                 produceTimeMs,
                 processedTimeMs,
                 internalSeconds,
-                null, null, null, null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, // watchState, serverIp, processId, workitemId, transNo
+                null, null, null, null, null, // errorCode, errorType, errorLevel, errorInfo, errorInterface
+                null, null, null, null, null, null); // systemState, workitemState, userNo, startTime, checkOutTime,
+                                                     // checkInTime
     }
 
     /**
@@ -289,13 +391,36 @@ public class MessageParser {
         return "UNKNOWN";
     }
 
-    private ParsedMessage createErrorMessage(String messageType) {
+    private ParsedMessage createErrorMessage(String messageType, String category) {
         return new ParsedMessage(
                 messageType,
+                category,
                 "UNKNOWN", null, null, null, null, null, null, "PARSE_ERROR",
                 null, null, null,
                 null, null, null, null, null,
+                null, null, null, null, null,
                 null, null, null, null, null, null);
+    }
+
+    /**
+     * 将errorLevel映射为result
+     * errorLevel: 1=轻微, 2=一般, 3=严重, 4=危急
+     */
+    private String mapErrorLevelToResult(String errorLevel) {
+        if (errorLevel == null)
+            return "ERROR";
+        switch (errorLevel) {
+            case "1":
+                return "ERROR_MINOR"; // 轻微
+            case "2":
+                return "ERROR_NORMAL"; // 一般
+            case "3":
+                return "ERROR_SERIOUS"; // 严重
+            case "4":
+                return "ERROR_CRITICAL"; // 危急
+            default:
+                return "ERROR";
+        }
     }
 
     /**

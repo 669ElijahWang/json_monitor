@@ -100,6 +100,28 @@ public class MetricsService {
                 "workitemState", safeTag(workitemState))).increment();
     }
 
+    /** 按消息种类统计（从key前缀识别：state/competence/SUNYARD/AGENT等） */
+    public void incByCategory(String category, String tenant, String result) {
+        registry.counter("msg_by_category_total", Tags.of(
+                "category", safeTag(category),
+                "tenant", safeTag(tenant),
+                "result", safeTag(result))).increment();
+    }
+
+    /** 按errorType统计（COMPETENCE类型消息） */
+    public void incByErrorType(String tenant, String errorType) {
+        registry.counter("msg_error_type_total", Tags.of(
+                "tenant", safeTag(tenant),
+                "errorType", safeTag(errorType))).increment();
+    }
+
+    /** 按errorLevel统计（COMPETENCE类型消息） */
+    public void incByErrorLevel(String tenant, String errorLevel) {
+        registry.counter("msg_error_level_total", Tags.of(
+                "tenant", safeTag(tenant),
+                "errorLevel", safeTag(errorLevel))).increment();
+    }
+
     /** 记录端到端耗时（Timer） */
     public void recordE2eLatency(String tenant, String systemNo, String nodeName, String topic, Duration duration) {
         registry.timer("msg_e2e_latency_seconds", Tags.of(
@@ -147,6 +169,7 @@ public class MetricsService {
                 "tenant", safeTag(parsed.getTenant()),
                 "system", safeTag(parsed.getSystemNo()),
                 "taskId", safeTag(parsed.getTaskId()),
+                "category", safeTag(parsed.getCategory()),
                 "nodeName", safeTag(parsed.getNodeName()),
                 "result", safeTag(parsed.getResult()),
                 "busId", safeTag(parsed.getBusId()),

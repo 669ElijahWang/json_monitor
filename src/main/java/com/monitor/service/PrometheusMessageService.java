@@ -19,13 +19,13 @@ public class PrometheusMessageService {
     }
 
     public Map<String, Object> search(String q,
-                                      String tenant,
-                                      String systemNo,
-                                      String busId,
-                                      String taskId,
-                                      int minutes,
-                                      int page,
-                                      int size) {
+            String tenant,
+            String systemNo,
+            String busId,
+            String taskId,
+            int minutes,
+            int page,
+            int size) {
         int safeMinutes = clamp(minutes, 1, 60 * 24 * 15);
         int safePage = Math.max(0, page);
         int safeSize = clamp(size, 1, 200);
@@ -48,7 +48,8 @@ public class PrometheusMessageService {
             countByKey.put(keyOf(sp.getMetric()), toLongOrZero(sp.getValue()));
         }
 
-        lastSeen.sort(Comparator.comparing(PrometheusQueryService.SeriesPoint::getValue, Comparator.nullsLast(Comparator.naturalOrder())).reversed());
+        lastSeen.sort(Comparator.comparing(PrometheusQueryService.SeriesPoint::getValue,
+                Comparator.nullsLast(Comparator.naturalOrder())).reversed());
 
         int from = safePage * safeSize;
         if (from >= lastSeen.size()) {
@@ -70,6 +71,7 @@ public class PrometheusMessageService {
             row.put("id", task + "-" + node + "-" + result);
             row.put("createdAt", lastSeenSec == 0 ? null : Instant.ofEpochSecond(lastSeenSec).toString());
             row.put("taskId", task);
+            row.put("category", m.getOrDefault("category", "unknown"));
             row.put("tenant", ten);
             row.put("systemNo", system);
             row.put("nodeName", node);
@@ -92,7 +94,8 @@ public class PrometheusMessageService {
         String q = "max_over_time(msg_task_last_seen_seconds" + selector + "[15d])";
         List<PrometheusQueryService.SeriesPoint> lastSeen = prometheus.queryVector(q);
 
-        lastSeen.sort(Comparator.comparing(PrometheusQueryService.SeriesPoint::getValue, Comparator.nullsLast(Comparator.naturalOrder())));
+        lastSeen.sort(Comparator.comparing(PrometheusQueryService.SeriesPoint::getValue,
+                Comparator.nullsLast(Comparator.naturalOrder())));
 
         List<Map<String, Object>> out = new ArrayList<>(lastSeen.size());
         for (PrometheusQueryService.SeriesPoint sp : lastSeen) {
@@ -118,12 +121,12 @@ public class PrometheusMessageService {
     }
 
     public Map<String, Object> pendingTasks(String q,
-                                           String tenant,
-                                           String systemNo,
-                                           String busId,
-                                           int minutes,
-                                           int expectedSeconds,
-                                           int size) {
+            String tenant,
+            String systemNo,
+            String busId,
+            int minutes,
+            int expectedSeconds,
+            int size) {
         int safeMinutes = clamp(minutes, 1, 60 * 24 * 15);
         int safeExpected = clamp(expectedSeconds, 1, 60 * 60 * 24);
         int safeSize = clamp(size, 1, 500);
@@ -135,8 +138,10 @@ public class PrometheusMessageService {
         String startSelector = mergeSelector(selector, "result=\"NEW\"");
         String doneSelector = mergeSelector(selector, "result!=\"NEW\"");
 
-        String startQ = "max by (taskId,tenant,system,busId,eventType,nodeName) (max_over_time(msg_task_last_seen_seconds" + startSelector + "[" + window + "]))";
-        String doneQ = "max by (taskId) (max_over_time(msg_task_last_seen_seconds" + doneSelector + "[" + window + "]))";
+        String startQ = "max by (taskId,tenant,system,busId,eventType,nodeName) (max_over_time(msg_task_last_seen_seconds"
+                + startSelector + "[" + window + "]))";
+        String doneQ = "max by (taskId) (max_over_time(msg_task_last_seen_seconds" + doneSelector + "[" + window
+                + "]))";
 
         List<PrometheusQueryService.SeriesPoint> starts = prometheus.queryVector(startQ);
         List<PrometheusQueryService.SeriesPoint> dones = prometheus.queryVector(doneQ);
