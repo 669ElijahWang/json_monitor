@@ -9,12 +9,6 @@ rules:
     labels:
       request: "$1"
 
-  - pattern: 'kafka.network<type=SocketServer, name=NetworkProcessorAvgIdlePercent, networkProcessor=(.+)><>Value'
-    name: kafka_network_processoridletime_avg
-    type: GAUGE
-    labels:
-      network_processor: "$1"
-
   - pattern: 'kafka.network<type=SocketServer, name=NetworkProcessorAvgIdlePercent><>Value'
     name: kafka_network_processoridletime_avg
     type: GAUGE
@@ -28,5 +22,5 @@ rules:
     type: GAUGE
 
   - pattern: 'kafka.server<type=ReplicaManager, name=IsrShrinksPerSec><>Count'
-    name: kafka_controller_kafkacontroller_isrshrinks_total
+    name: kafka_server_replicamanager_isrshrinks_total
     type: COUNTER

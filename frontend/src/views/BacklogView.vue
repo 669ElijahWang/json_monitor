@@ -13,7 +13,7 @@
     <el-card>
       <el-form :inline="true" @submit.prevent>
         <el-form-item label="topic">
-          <el-input v-model="filters.topic" placeholder="monitor-topic" style="width: 220px" />
+          <el-input v-model="filters.topic" placeholder="SUNYARD" style="width: 220px" />
         </el-form-item>
         <el-form-item label="groupId">
           <el-input v-model="filters.groupId" placeholder="monitor-observer-group" style="width: 220px" />
@@ -151,7 +151,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api/client";
 
-const filters = reactive({ topic: "monitor-topic", groupId: "monitor-observer-group", limit: 50 });
+const filters = reactive({ topic: "SUNYARD", groupId: "monitor-observer-group", limit: 50 });
 const snapshot = reactive({ totalLag: 0, partitions: [], records: [] });
 const error = ref("");
 const browseError = ref("");
@@ -287,14 +287,26 @@ const canPrev = computed(() => {
   return start > committed;
 });
 
+const loading = ref(false);
+
 async function loadSnapshot(resetPage) {
-  error.value = "";
+  if (loading.value) return;
+  loading.value = true;
+  
+  // 只有手动重置或初次加载时才清空错误，避免定时刷新导致布局闪烁
+  if (resetPage) {
+    error.value = "";
+  }
+
   try {
     const res = await api.get("/kafka/backlog", { params: { ...filters } });
     Object.assign(snapshot, res.data || {});
     if (res.data?.error) {
       error.value = res.data.error;
+    } else {
+      error.value = ""; // 成功后确保清空旧的错误信息
     }
+
     const key = `${filters.topic}|${filters.groupId}`;
     if (resetPage || key !== lastKey.value) {
       lastKey.value = key;
@@ -306,6 +318,8 @@ async function loadSnapshot(resetPage) {
   } catch (e) {
     const msg = e?.response?.data?.message || e?.message || String(e);
     error.value = msg;
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -313,12 +327,19 @@ async function refreshAll() {
   await loadSnapshot(true);
 }
 
+let pollTimer = null;
+async function startPolling() {
+  if (pollTimer) clearTimeout(pollTimer);
+  await loadSnapshot(false);
+  pollTimer = setTimeout(startPolling, 5000);
+}
+
 onMounted(async () => {
   await loadSnapshot(true);
-  timer = window.setInterval(() => loadSnapshot(false), 5000);
+  pollTimer = setTimeout(startPolling, 5000);
 });
 
 onBeforeUnmount(() => {
-  if (timer) window.clearInterval(timer);
+  if (pollTimer) clearTimeout(pollTimer);
 });
 </script>

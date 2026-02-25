@@ -17,12 +17,16 @@ public class BaseHealthService {
     }
 
     public Map<String, Object> health() {
-        Double produceLatencyMs = prometheus.queryScalar("max(avg_over_time(kafka_network_requestmetrics_totallatency_ms{request=\"Produce\"}[5m]))");
+        Double produceLatencyMs = prometheus.queryScalar(
+                "max(avg_over_time(kafka_network_requestmetrics_totallatency_ms{request=\"Produce\"}[5m]))");
         Double diskIoBusyRatio = prometheus.queryScalar("max(rate(node_disk_io_time_seconds_total[5m]))");
-        Double networkProcessorIdle = prometheus.queryScalar("min(avg_over_time(kafka_network_processoridletime_avg[5m]))");
+        Double networkProcessorIdle = prometheus
+                .queryScalar("min(avg_over_time(kafka_network_processoridletime_avg[5m]))");
         Double underReplicated = prometheus.queryScalar("max(kafka_server_replicamanager_underreplicatedpartitions)");
-        Double controllerSwitches1h = prometheus.queryScalar("max(changes(kafka_controller_kafkacontroller_activecontrollercount[1h]))");
-        Double isrShrinks1h = prometheus.queryScalar("sum(increase(kafka_controller_kafkacontroller_isrshrinks_total[1h]))");
+        Double controllerSwitches1h = prometheus
+                .queryScalar("max(changes(kafka_controller_kafkacontroller_activecontrollercount[1h]))");
+        Double isrShrinks1h = prometheus
+                .queryScalar("sum(increase(kafka_server_replicamanager_isrshrinks_total[1h]))");
 
         Map<String, Object> metrics = new LinkedHashMap<>();
         metrics.put("produceLatencyMsAvg5m", produceLatencyMs);
@@ -33,12 +37,18 @@ public class BaseHealthService {
         metrics.put("isrShrinks1h", isrShrinks1h);
 
         List<String> missing = new ArrayList<>();
-        if (produceLatencyMs == null) missing.add("produceLatencyMsAvg5m");
-        if (diskIoBusyRatio == null) missing.add("diskIoBusyRatio");
-        if (networkProcessorIdle == null) missing.add("networkProcessorIdleRatio");
-        if (underReplicated == null) missing.add("underReplicatedPartitions");
-        if (controllerSwitches1h == null) missing.add("controllerSwitches1h");
-        if (isrShrinks1h == null) missing.add("isrShrinks1h");
+        if (produceLatencyMs == null)
+            missing.add("Produce 延迟");
+        if (diskIoBusyRatio == null)
+            missing.add("磁盘 I/O");
+        if (networkProcessorIdle == null)
+            missing.add("网络线程空闲");
+        if (underReplicated == null)
+            missing.add("副本状态(URP)");
+        if (controllerSwitches1h == null)
+            missing.add("控制器切换");
+        if (isrShrinks1h == null)
+            missing.add("ISR 变动");
 
         List<String> suggestions = new ArrayList<>();
         int level = 0;
@@ -99,12 +109,16 @@ public class BaseHealthService {
         }
 
         String status;
+        String brokerStatus = (controllerSwitches1h != null || underReplicated != null) ? "ONLINE" : "OFFLINE";
+
         if (level >= 2) {
             status = "CRITICAL";
         } else if (level == 1) {
             status = "WARN";
-        } else if (missing.size() == metrics.size()) {
+        } else if (brokerStatus.equals("OFFLINE")) {
             status = "UNKNOWN";
+            suggestions.add(
+                    "无法获取 Kafka 核心指标，请检查：1. Kafka 是否开启 JMX (9999)；2. kafka-jmx-exporter 是否正常运行；3. Prometheus 是否配置了抓取任务");
         } else {
             status = "OK";
         }
@@ -112,10 +126,10 @@ public class BaseHealthService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("sampledAt", Instant.now().toString());
         out.put("status", status);
+        out.put("brokerStatus", brokerStatus);
         out.put("metrics", metrics);
         out.put("suggestions", suggestions);
         out.put("missing", missing);
         return out;
     }
 }
-

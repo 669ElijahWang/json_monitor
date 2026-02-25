@@ -42,7 +42,7 @@ public class MetricsService {
 
     public MetricsService(MeterRegistry registry,
             @Value("${monitor.prometheus.task-metrics-enabled:true}") boolean taskMetricsEnabled,
-            @Value("${monitor.prometheus.task-metrics-max-series:5000}") int taskMetricsMaxSeries,
+            @Value("${monitor.prometheus.task-metrics-max-series:50000}") int taskMetricsMaxSeries,
             @Value("${monitor.message.big-threshold-bytes:1048576}") long bigMessageThresholdBytes,
             @Value("${monitor.message.big-trace-max:200}") int bigMessageTraceMax) {
         this.registry = registry;
@@ -169,10 +169,12 @@ public class MetricsService {
                 "tenant", safeTag(parsed.getTenant()),
                 "system", safeTag(parsed.getSystemNo()),
                 "taskId", safeTag(parsed.getTaskId()),
+                "transNo", safeTag(parsed.getTransNo()),
+                "workitemId", safeTag(parsed.getWorkitemId()),
+                "messageType", safeTag(parsed.getMessageType()),
                 "category", safeTag(parsed.getCategory()),
                 "nodeName", safeTag(parsed.getNodeName()),
                 "result", safeTag(parsed.getResult()),
-                "busId", safeTag(parsed.getBusId()),
                 "eventType", safeTag(parsed.getAdviseKey()));
 
         registry.counter("msg_task_events_total", tags).increment();
@@ -219,6 +221,13 @@ public class MetricsService {
         DistributionSummary summary = DistributionSummary.builder("msg_size_bytes")
                 .tags(Tags.of(
                         "topic", safeTag(topic)))
+                .serviceLevelObjectives(
+                        1024.0, // 1 KB
+                        10 * 1024.0, // 10 KB
+                        100 * 1024.0, // 100 KB
+                        1024 * 1024.0, // 1 MB
+                        10 * 1024 * 1024.0 // 10 MB
+                )
                 .register(registry);
         summary.record(Math.max(0, sizeBytes));
     }
@@ -253,7 +262,6 @@ public class MetricsService {
         row.put("nodeName", parsed.getNodeName());
         row.put("result", parsed.getResult());
         row.put("adviseKey", parsed.getAdviseKey());
-        row.put("busId", parsed.getBusId());
 
         bigMessageTrace.addFirst(row);
         while (bigMessageTrace.size() > bigMessageTraceMax) {

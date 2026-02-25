@@ -3,12 +3,23 @@ package com.monitor.kafka;
 import com.monitor.service.MessageParser;
 import com.monitor.service.MetricsService;
 import com.monitor.service.ParsedMessage;
+import com.monitor.service.RealtimeStatsService;
+import com.monitor.service.MessageRawStoreService;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.UUID;
 
 /**
  * 观察者消费者：监听一个或多个 Topic，把消息解析后写入监控指标。
@@ -22,13 +33,19 @@ import java.time.Duration;
 public class MessageObserverConsumer {
     private final MessageParser parser;
     private final MetricsService metrics;
+    private final RealtimeStatsService realtimeStats;
+    private final MessageRawStoreService rawStore;
     private final double timeoutSeconds;
 
     public MessageObserverConsumer(MessageParser parser,
             MetricsService metrics,
+            RealtimeStatsService realtimeStats,
+            MessageRawStoreService rawStore,
             @Value("${monitor.latency.timeout-seconds:0.8}") double timeoutSeconds) {
         this.parser = parser;
         this.metrics = metrics;
+        this.realtimeStats = realtimeStats;
+        this.rawStore = rawStore;
         this.timeoutSeconds = timeoutSeconds;
     }
 
@@ -42,6 +59,11 @@ public class MessageObserverConsumer {
         // rawJson 可能为 null；解析器会做兜底并返回 PARSE_ERROR
         String rawJson = record.value();
         String key = record.key();
+
+        // 打印监控到的json放入根目录下的json文件夹
+        if (rawJson != null) {
+            saveJsonToFile(record.topic(), key, rawJson);
+        }
         ParsedMessage parsed = parser.parse(key, rawJson);
 
         String messageType = parsed.getMessageType();
@@ -59,6 +81,63 @@ public class MessageObserverConsumer {
         metrics.incProduced(parsed.getTenant(), parsed.getSystemNo(), parsed.getAdviseKey());
         metrics.incConsumed(parsed.getTenant(), parsed.getSystemNo(), parsed.getResult(), parsed.getNodeName());
 
+        long nowMs = System.currentTimeMillis();
+        String topic = record.topic();
+
+        long sizeBytes = 0;
+        if (rawJson != null) {
+            try {
+                sizeBytes = rawJson.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            } catch (Exception ignored) {
+                sizeBytes = rawJson.length();
+            }
+        }
+        metrics.recordMessageSize(topic, sizeBytes);
+        metrics.observeBigMessage(parsed, topic, record.partition(), record.offset(), record.key(), sizeBytes, nowMs);
+
+        long recordTs = record.timestamp();
+        long lagMs = Math.max(0, nowMs - recordTs);
+        metrics.recordLagLatency(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(), topic,
+                Duration.ofMillis(lagMs));
+
+        Long e2eMs = null;
+        Long internalMs = null;
+
+        // 只对 TENANT_MESSAGE 类型计算 E2E 和处理延迟（只有此类型有 startTime/checkOutTime/checkInTime）
+        if ("TENANT_MESSAGE".equals(messageType)) {
+            Long startTimeMs = parsed.getStartTimeMs();
+
+            // 使用startTime计算E2E延迟
+            if (startTimeMs != null) {
+                e2eMs = Math.max(0, nowMs - startTimeMs);
+                metrics.recordE2eLatency(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(), topic,
+                        Duration.ofMillis(e2eMs));
+            }
+
+            // 使用checkOutTime-startTime或checkInTime-startTime计算处理延迟
+            if (startTimeMs != null) {
+                Long checkOutTimeMs = parsed.getCheckOutTimeMs();
+                Long checkInTimeMs = parsed.getCheckInTimeMs();
+                Long endTimeMs = checkInTimeMs != null ? checkInTimeMs
+                        : (checkOutTimeMs != null ? checkOutTimeMs : null);
+                if (endTimeMs != null) {
+                    internalMs = Math.max(0, endTimeMs - startTimeMs);
+                    metrics.recordInternalLatency(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(), topic,
+                            Duration.ofMillis(internalMs));
+                }
+            }
+
+            // 使用startTime到当前时间作为超时检测基准
+            if (startTimeMs != null) {
+                long timeoutBasisMs = Math.max(0, nowMs - startTimeMs);
+                if (timeoutBasisMs > Math.round(timeoutSeconds * 1000.0)) {
+                    metrics.incTimeout(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(),
+                            thresholdLabel(timeoutSeconds));
+                }
+            }
+        }
+
+        // 以下是传统的 Prometheus 计数器，用于告警和长期存储
         // STATE类型消息按watchState统计（Kafka消息接收状态）
         if ("STATE".equals(messageType) && parsed.getWatchState() != null) {
             metrics.incByWatchState(parsed.getTenant(), parsed.getWatchState());
@@ -84,72 +163,36 @@ public class MessageObserverConsumer {
             }
         }
 
-        long nowMs = System.currentTimeMillis();
-        String topic = record.topic();
-
-        long sizeBytes = 0;
-        if (rawJson != null) {
-            try {
-                sizeBytes = rawJson.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-            } catch (Exception ignored) {
-                sizeBytes = rawJson.length();
-            }
-        }
-        metrics.recordMessageSize(topic, sizeBytes);
-        metrics.observeBigMessage(parsed, topic, record.partition(), record.offset(), record.key(), sizeBytes, nowMs);
-
-        long recordTs = record.timestamp();
-        Duration lag = Duration.ofMillis(Math.max(0, nowMs - recordTs));
-        metrics.recordLagLatency(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(), topic, lag);
-
-        Long produceMs = parsed.getProduceTimeMs();
-        Long processedMs = parsed.getProcessedTimeMs();
-        if (produceMs != null && processedMs != null) {
-            Duration e2e = Duration.ofMillis(Math.max(0, processedMs - produceMs));
-            metrics.recordE2eLatency(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(), topic, e2e);
-        }
-
-        // 对于AGENT消息，使用startTime计算E2E延迟
-        Long startTimeMs = parsed.getStartTimeMs();
-        if (startTimeMs != null && produceMs == null) {
-            Duration e2e = Duration.ofMillis(Math.max(0, nowMs - startTimeMs));
-            metrics.recordE2eLatency(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(), topic, e2e);
-        }
-
-        Double internalSeconds = parsed.getInternalSeconds();
-        if (internalSeconds != null) {
-            Duration internal = Duration.ofMillis(Math.max(0L, Math.round(internalSeconds * 1000.0)));
-            metrics.recordInternalLatency(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(), topic,
-                    internal);
-        }
-
-        // 对于AGENT消息，使用checkOutTime-startTime或checkInTime-startTime计算处理延迟
-        if (internalSeconds == null && startTimeMs != null) {
-            Long checkOutTimeMs = parsed.getCheckOutTimeMs();
-            Long checkInTimeMs = parsed.getCheckInTimeMs();
-            Long endTimeMs = checkInTimeMs != null ? checkInTimeMs : (checkOutTimeMs != null ? checkOutTimeMs : null);
-            if (endTimeMs != null) {
-                Duration internal = Duration.ofMillis(Math.max(0, endTimeMs - startTimeMs));
-                metrics.recordInternalLatency(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(), topic,
-                        internal);
-            }
-        }
-
-        Duration timeoutBasis = null;
-        if (internalSeconds != null) {
-            timeoutBasis = Duration.ofMillis(Math.max(0L, Math.round(internalSeconds * 1000.0)));
-        } else if (produceMs != null && processedMs != null) {
-            timeoutBasis = Duration.ofMillis(Math.max(0, processedMs - produceMs));
-        } else if (startTimeMs != null) {
-            // 使用startTime到当前时间作为超时检测基准
-            timeoutBasis = Duration.ofMillis(Math.max(0, nowMs - startTimeMs));
-        }
-        if (timeoutBasis != null && timeoutBasis.toMillis() > Math.round(timeoutSeconds * 1000.0)) {
-            metrics.incTimeout(parsed.getTenant(), parsed.getSystemNo(), parsed.getNodeName(),
-                    thresholdLabel(timeoutSeconds));
-        }
-
         metrics.observeTaskEvent(parsed, nowMs);
+
+        // 记录原始消息到缓存（包含 Kafka Key 和原始 JSON）
+        String fullContent = rawJson;
+        if (rawJson != null) {
+            String lookupKey = buildLookupKey(parsed);
+
+            // 采用带标记的格式，方便前端解析展示
+            fullContent = "KAFKA_KEY[" + (key != null ? key : "null") + "]KAFKA_BODY[" + rawJson + "]";
+            rawStore.put(lookupKey, fullContent);
+        }
+
+        // 实时统计与搜索缓存（传入带Key的完整内容，方便前端展示Key）
+        realtimeStats.recordMessage(parsed, lagMs, e2eMs, internalMs, fullContent);
+    }
+
+    private String buildLookupKey(ParsedMessage parsed) {
+        return safe(parsed.getTenant())
+                + "|" + safe(parsed.getSystemNo())
+                + "|" + safe(parsed.getTaskId())
+                + "|" + safe(parsed.getNodeName())
+                + "|" + safe(parsed.getResult())
+                + "|" + "" // busId is not in ParsedMessage but in labels, we don't use it for raw store
+                           // key if not present
+                + "|" + safe(parsed.getAdviseKey())
+                + "|" + safe(parsed.getTransNo());
+    }
+
+    private static String safe(String v) {
+        return (v == null || v.isBlank()) ? "unknown" : v;
     }
 
     private static String thresholdLabel(double seconds) {
@@ -159,5 +202,35 @@ public class MessageObserverConsumer {
             return (ms / 1000) + "s";
         }
         return (ms / 1000.0) + "s";
+    }
+
+    // 打印json
+    private void saveJsonToFile(String topic, String key, String jsonContent) {
+        try {
+            // Define the directory path
+            String directoryName = "json";
+            Path directoryPath = Paths.get(directoryName);
+
+            // Create the directory if it doesn't exist
+            if (!Files.exists(directoryPath)) {
+                Files.createDirectories(directoryPath);
+            }
+
+            // Generate a unique filename
+            String safeKey = (key != null) ? key.replaceAll("[^a-zA-Z0-9._-]", "_") : "null_key";
+            String timestamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS").format(LocalDateTime.now());
+            String uuid = UUID.randomUUID().toString().substring(0, 6);
+            String filename = String.format("%s_%s_%s_%s.json", topic, timestamp, safeKey, uuid);
+
+            // Create the file and write the content
+            File file = new File(directoryPath.toFile(), filename);
+            try (FileWriter writer = new FileWriter(file)) {
+                writer.write(jsonContent);
+                // System.out.println("Saved JSON to: " + file.getAbsolutePath());
+            }
+        } catch (IOException e) {
+            System.err.println("Failed to save JSON to file: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 }

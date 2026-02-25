@@ -1,7 +1,7 @@
 package com.monitor.controller;
 
-import com.monitor.service.AlertRulesService;
-import org.springframework.http.MediaType;
+import com.monitor.service.LatencyAlertConfig;
+import com.monitor.service.LatencyAlertService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -12,31 +12,42 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Prometheus 告警规则管理接口：
- * - GET 返回当前 rules 文件内容（纯文本）
- * - POST 写入 rules 文件，并尝试触发 Prometheus 热加载（/-/reload）
+ * 告警配置管理接口：
+ * - GET 获取延时告警配置
+ * - POST 保存延时告警配置
  */
 @RestController
 @RequestMapping("/api/alerts")
 public class AlertRulesController {
-    private final AlertRulesService service;
+    private final LatencyAlertService latencyAlertService;
 
-    public AlertRulesController(AlertRulesService service) {
-        this.service = service;
+    public AlertRulesController(LatencyAlertService latencyAlertService) {
+        this.latencyAlertService = latencyAlertService;
     }
 
-    @GetMapping(value = "/rules", produces = MediaType.TEXT_PLAIN_VALUE)
-    public String getRules() {
-        return service.readRules();
+    @GetMapping("/latency-config")
+    public LatencyAlertConfig getLatencyConfig() {
+        return latencyAlertService.getConfig();
     }
 
-    @PostMapping(value = "/rules", consumes = MediaType.TEXT_PLAIN_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public Map<String, Object> setRules(@RequestBody String newRules) {
-        service.writeRules(newRules);
-        boolean reloaded = service.reloadPrometheus();
+    @PostMapping("/latency-config")
+    public Map<String, Object> setLatencyConfig(@RequestBody LatencyAlertConfig config) {
+        latencyAlertService.saveConfig(config);
         Map<String, Object> result = new HashMap<>();
-        result.put("saved", true);
-        result.put("reloaded", reloaded);
+        result.put("success", true);
+        return result;
+    }
+
+    @PostMapping("/test-email")
+    public Map<String, Object> testEmail() {
+        Map<String, Object> result = new HashMap<>();
+        try {
+            latencyAlertService.sendTestEmail();
+            result.put("success", true);
+        } catch (Exception e) {
+            result.put("success", false);
+            result.put("message", e.getMessage());
+        }
         return result;
     }
 }

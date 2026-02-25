@@ -34,6 +34,8 @@ services:
       - kafka
     ports:
       - "5556:5556"
+    environment:
+      SERVICE_PORT: 5556
     volumes:
       - ./prometheus/kafka-jmx-exporter.yml:/opt/jmx_exporter/config.yml:ro
 
@@ -61,16 +63,3 @@ services:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
-
-  grafana:
-    image: grafana/grafana:10.4.2
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_SECURITY_ALLOW_EMBEDDING: "true"
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
-    volumes:
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

@@ -40,18 +40,21 @@
       <el-col :span="8">
         <el-card class="hover-card stats-card" shadow="never">
            <div class="stats-header">
-            <span>成功 / 失败</span>
+            <span>消息分布</span>
             <el-icon class="stats-icon text-success"><Check /></el-icon>
           </div>
-          <div class="stats-content-row">
+          <div class="stats-content-row" style="gap: 16px; align-items: flex-start">
             <div class="stats-item">
-              <div class="stats-label text-success">成功</div>
-              <div class="stats-sub-value text-success">{{ data.success }}</div>
+              <div class="stats-label text-primary">节点状态</div>
+              <div class="stats-sub-value text-primary">{{ data.state }}</div>
             </div>
-            <el-divider direction="vertical" />
              <div class="stats-item">
-              <div class="stats-label text-danger">失败</div>
-              <div class="stats-sub-value text-danger">{{ data.fail }}</div>
+              <div class="stats-label text-danger">异常节点</div>
+              <div class="stats-sub-value text-danger">{{ data.competence }}</div>
+            </div>
+             <div class="stats-item">
+              <div class="stats-label text-warning">租户数据</div>
+              <div class="stats-sub-value text-warning">{{ data.tenant }}</div>
             </div>
           </div>
         </el-card>
@@ -59,32 +62,20 @@
       <el-col :span="8">
         <el-card class="hover-card stats-card" shadow="never">
            <div class="stats-header">
-            <span>延迟监控 (s)</span>
+             <span>积压延迟监控</span>
             <el-icon class="stats-icon text-warning"><Timer /></el-icon>
           </div>
-          <div class="latency-grid">
-            <div class="latency-row">
-              <span class="latency-label">积压</span>
-               <div class="latency-tags">
-                <el-tag size="small" type="info" effect="plain">P50 {{ latency.lag?.p50S ?? "-" }}</el-tag>
-                <el-tag size="small" type="danger" effect="light">P99 {{ latency.lag?.p99S ?? "-" }}</el-tag>
-               </div>
-            </div>
-            <div class="latency-row">
-              <span class="latency-label">处理</span>
-               <div class="latency-tags">
-                <el-tag size="small" type="info" effect="plain">P50 {{ latency.internal?.p50S ?? "-" }}</el-tag>
-                <el-tag size="small" type="danger" effect="light">P99 {{ latency.internal?.p99S ?? "-" }}</el-tag>
-               </div>
-            </div>
-             <div class="latency-row">
-              <span class="latency-label">E2E</span>
-               <div class="latency-tags">
-                <el-tag size="small" type="info" effect="plain">P50 {{ latency.e2e?.p50S ?? "-" }}</el-tag>
-                <el-tag size="small" type="danger" effect="light">P99 {{ latency.e2e?.p99S ?? "-" }}</el-tag>
-               </div>
-            </div>
-          </div>
+           <div class="latency-desc-list">
+             <div class="latency-desc-item">
+               <span class="dot blue"></span> 50% 的消息积压在 <span class="highlight">{{ latency.lag?.p50S ?? "-" }}</span> 秒之内
+             </div>
+             <div class="latency-desc-item">
+               <span class="dot orange"></span> 95% 的消息积压在 <span class="highlight">{{ latency.lag?.p95S ?? "-" }}</span> 秒之内
+             </div>
+             <div class="latency-desc-item">
+               <span class="dot red"></span> 99% 的消息积压在 <span class="highlight">{{ latency.lag?.p99S ?? "-" }}</span> 秒之内
+             </div>
+           </div>
         </el-card>
       </el-col>
     </el-row>
@@ -94,7 +85,12 @@
         <el-card class="hover-card" shadow="never">
           <template #header>
             <div class="card-header">
-              <span>吞吐趋势（每分钟）</span>
+              <div class="card-header-left">
+                <span>吞吐趋势（每分钟）</span>
+                <el-tag v-if="lastUpdateTime" size="small" type="info" effect="plain" class="update-tag">
+                  更新于 {{ lastUpdateTime }}
+                </el-tag>
+              </div>
               <el-icon><TrendCharts /></el-icon>
             </div>
           </template>
@@ -125,31 +121,6 @@
             </div>
           </template>
           <div ref="watchStateEl" style="height: 320px" />
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card class="hover-card" shadow="never">
-          <template #header>
-            <div class="card-header">
-              <span>业务流程状态分布（systemState）</span>
-              <el-icon><Operation /></el-icon>
-            </div>
-          </template>
-          <div ref="systemStateEl" style="height: 320px" />
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-row :gutter="20" style="margin-top: 20px">
-      <el-col :span="12">
-        <el-card class="hover-card" shadow="never">
-          <template #header>
-            <div class="card-header">
-              <span>工作项状态分布（workitemState）</span>
-              <el-icon><List /></el-icon>
-            </div>
-          </template>
-          <div ref="workitemStateEl" style="height: 320px" />
         </el-card>
       </el-col>
       <el-col :span="12">
@@ -206,7 +177,7 @@ import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api/client";
 import * as echarts from "echarts";
 import { useRouter } from "vue-router";
-import { Message, Check, Timer, TrendCharts, User, PieChart, Warning, DataAnalysis, Operation, List, Tickets } from "@element-plus/icons-vue";
+import { Message, Check, Timer, TrendCharts, User, PieChart, Warning, DataAnalysis, Tickets } from "@element-plus/icons-vue";
 
 const router = useRouter();
 
@@ -223,7 +194,7 @@ const timeOptions = [
 
 const selectedMinutes = ref(60);
 
-const data = reactive({ window: "60m", messages: 0, success: 0, fail: 0, from: "-", to: "-" });
+const data = reactive({ window: "60m", messages: 0, state: 0, competence: 0, tenant: 0, from: "-", to: "-" });
 const latency = reactive({ window: "60m", lag: null, internal: null, e2e: null });
 const error = ref("");
 
@@ -231,16 +202,13 @@ const trendEl = ref(null);
 const tenantEl = ref(null);
 const sizeEl = ref(null);
 const watchStateEl = ref(null);
-const systemStateEl = ref(null);
-const workitemStateEl = ref(null);
 const messageTypeEl = ref(null);
 const bigMessages = ref([]);
+const lastUpdateTime = ref("");
 let trendChart;
 let tenantChart;
 let sizeChart;
 let watchStateChart;
-let systemStateChart;
-let workitemStateChart;
 let messageTypeChart;
 let timer;
 let initRetry;
@@ -267,6 +235,13 @@ function formatHHmm(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return (iso || "").slice(11, 16);
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function formatHHmmss(date) {
+  if (!date) return "";
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
 function formatBytes(n) {
@@ -302,7 +277,12 @@ function renderSize(resp) {
     } else {
       const upper = Number(le);
       if (Number.isFinite(upper)) {
-        x.push(`≤${formatBytes(upper)}`);
+        // 第一个桶用 "≤X" 表示，后续桶用 "prevLe~X" 区间表示
+        if (prevLe == null) {
+          x.push(`≤${formatBytes(upper)}`);
+        } else {
+          x.push(`${formatBytes(prevLe)}~${formatBytes(upper)}`);
+        }
         prevLe = upper;
       } else {
         x.push(le || "-");
@@ -313,8 +293,8 @@ function renderSize(resp) {
 
   sizeChart.setOption({
     tooltip: { trigger: "axis" },
-    grid: { left: 50, right: 20, top: 20, bottom: 60 },
-    xAxis: { type: "category", data: x, axisLabel: { interval: 0, rotate: 30, color: "#666" } },
+    grid: { left: 50, right: 20, top: 20, bottom: 80 },
+    xAxis: { type: "category", data: x, axisLabel: { interval: 0, rotate: 35, color: "#666", fontSize: 11 } },
     yAxis: { type: "value", splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
     series: [
       {
@@ -335,24 +315,75 @@ function goTrace(taskId) {
 function renderTrend(rows) {
   if (!trendChart) return;
   const x = rows.map((r) => formatHHmm(r.ts));
-  const total = rows.map((r) => r.total || 0);
-  const success = rows.map((r) => r.success || 0);
-  const fail = rows.map((r) => r.fail || 0);
-  const timeout = rows.map((r) => r.timeout || 0);
+  
+  // 固定显示三个系列：State、Competence、Tenant
+  const series = [
+    {
+      name: '节点状态',
+      type: 'line',
+      smooth: true,
+      showSymbol: true,
+      symbolSize: 4,
+      itemStyle: { color: '#409eff' }, // 蓝色
+      areaStyle: { color: 'rgba(64, 158, 255, 0.1)' },
+      data: rows.map(r => r.state || 0)
+    },
+    {
+      name: '异常节点',
+      type: 'line',
+      smooth: true,
+      showSymbol: true,
+      symbolSize: 4,
+      itemStyle: { color: '#f56c6c' }, // 红色
+      areaStyle: { color: 'rgba(245, 108, 108, 0.1)' },
+      data: rows.map(r => r.competence || 0)
+    },
+    {
+      name: '租户数据',
+      type: 'line',
+      smooth: true,
+      showSymbol: true,
+      symbolSize: 4,
+      itemStyle: { color: '#e6a23c' }, // 橙色
+      areaStyle: { color: 'rgba(230, 162, 60, 0.1)' },
+      data: rows.map(r => r.tenant || 0)
+    }
+  ];
 
   trendChart.setOption({
-    tooltip: { trigger: "axis" },
-    legend: { data: ["总数", "成功", "失败", "超时"], top: 0 },
+    tooltip: { 
+      trigger: 'axis',
+      formatter: (params) => {
+        let result = `<div style="font-weight:600;margin-bottom:4px">${params[0].axisValue}</div>`;
+        let total = 0;
+        params.forEach(p => {
+          total += p.value || 0;
+          result += `<div style="display:flex;justify-content:space-between;gap:12px">
+            <span>${p.marker} ${p.seriesName}</span>
+            <span style="font-weight:600">${p.value || 0}</span>
+          </div>`;
+        });
+        result += `<div style="border-top:1px solid #eee;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between">
+          <span>总计</span><span style="font-weight:600">${total}</span>
+        </div>`;
+        return result;
+      }
+    },
+    legend: { data: ['节点状态', '异常节点', '租户数据'], top: 0 },
     grid: { left: 50, right: 20, top: 40, bottom: 30 },
-    xAxis: { type: "category", data: x, axisLine: { lineStyle: { color: "#ccc" } } },
-    yAxis: { type: "value", splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
-    series: [
-      { name: "总数", type: "line", smooth: true, showSymbol: false, itemStyle: { color: "#409eff" }, areaStyle: { opacity: 0.1 }, data: total },
-      { name: "成功", type: "line", smooth: true, showSymbol: false, itemStyle: { color: "#67c23a" }, data: success },
-      { name: "失败", type: "line", smooth: true, showSymbol: false, itemStyle: { color: "#f56c6c" }, data: fail },
-      { name: "超时", type: "line", smooth: true, showSymbol: false, itemStyle: { color: "#e6a23c" }, data: timeout }
-    ]
-  });
+    xAxis: { 
+      type: 'category', 
+      data: x, 
+      axisLine: { lineStyle: { color: '#ccc' } },
+      axisLabel: { color: '#666' }
+    },
+    yAxis: { 
+      type: 'value', 
+      minInterval: 1,
+      splitLine: { lineStyle: { type: 'dashed', color: '#eee' } }
+    },
+    series: series
+  }, true);
 }
 
 function renderTenant(rows) {
@@ -405,12 +436,6 @@ async function ensureCharts() {
   if (!watchStateChart && watchStateEl.value?.clientWidth > 0 && watchStateEl.value?.clientHeight > 0) {
     watchStateChart = echarts.init(watchStateEl.value);
   }
-  if (!systemStateChart && systemStateEl.value?.clientWidth > 0 && systemStateEl.value?.clientHeight > 0) {
-    systemStateChart = echarts.init(systemStateEl.value);
-  }
-  if (!workitemStateChart && workitemStateEl.value?.clientWidth > 0 && workitemStateEl.value?.clientHeight > 0) {
-    workitemStateChart = echarts.init(workitemStateEl.value);
-  }
   if (!messageTypeChart && messageTypeEl.value?.clientWidth > 0 && messageTypeEl.value?.clientHeight > 0) {
     messageTypeChart = echarts.init(messageTypeEl.value);
   }
@@ -418,32 +443,11 @@ async function ensureCharts() {
 
 // watchState状态颜色映射
 const watchStateColors = {
-  '0': '#909399',  // 待处理 - 灰色
+  '0': '#909399',  // 初始节点 - 灰色
   '1': '#409eff',  // 获取 - 蓝色
   '2': '#e6a23c',  // 处理中 - 橙色
   '4': '#f56c6c',  // 处理失败 - 红色
   '5': '#67c23a',  // 处理完成 - 绿色
-};
-
-// systemState状态颜色映射
-const systemStateColors = {
-  'WaitForCheckOut': '#909399',  // 等待签出 - 灰色
-  'WaitForApply': '#a0cfff',     // 等待申请 - 浅蓝
-  'Running': '#e6a23c',           // 运行中 - 橙色
-  'Suspend': '#f0a020',           // 挂起 - 黄色
-  'Complete': '#67c23a',          // 完成 - 绿色
-  'Terminate': '#f56c6c',         // 终止 - 红色
-  'Revoke': '#8b5cf6',            // 撤销 - 紫色
-};
-
-// workitemState状态颜色映射
-const workitemStateColors = {
-  '1': '#909399',  // 初始化 - 灰色
-  '2': '#a0cfff',  // 待处理 - 浅蓝
-  '4': '#e6a23c',  // 处理中 - 橙色
-  '5': '#f0a020',  // 挂起 - 黄色
-  '6': '#67c23a',  // 完成 - 绿色
-  '7': '#f56c6c',  // 已终止 - 红色
 };
 
 function renderPieChart(chart, data, colorMap, title) {
@@ -497,15 +501,24 @@ function renderPieChart(chart, data, colorMap, title) {
   });
 }
 
+const typeNameMap = {
+  'STATE': '节点状态',
+  'state': '节点状态',
+  'TENANT_MESSAGE': '租户数据',
+  'tenant_message': '租户数据',
+  'COMPETENCE': '异常节点',
+  'competence': '异常节点'
+};
+
 function renderBarChart(chart, data) {
   if (!chart) return;
-  const names = data.map(r => r.name);
+  const names = data.map(r => typeNameMap[r.name] || r.name);
   const values = data.map(r => r.count);
   const colors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399'];
   
   chart.setOption({
     tooltip: { trigger: 'axis' },
-    grid: { left: 80, right: 30, top: 20, bottom: 30 },
+    grid: { left: 100, right: 30, top: 20, bottom: 30 },
     xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#eee' } } },
     yAxis: { type: 'category', data: names, inverse: true, axisTick: { show: false }, axisLine: { show: false } },
     series: [{
@@ -525,29 +538,33 @@ async function loadAll() {
     const errors = [];
     const mins = selectedMinutes.value;
     
+    // 使用实时统计接口（内存数据，无 Prometheus 延迟）
     try {
-      const o = await api.get("/stats/overview", { params: { minutes: mins } });
+      const o = await api.get("/stats/realtime/overview", { params: { minutes: mins } });
       Object.assign(data, o.data);
     } catch (e) {
       errors.push(`overview: ${e?.message || String(e)}`);
     }
 
     try {
-      const l = await api.get("/stats/latency", { params: { minutes: mins } });
+      const l = await api.get("/stats/realtime/latency", { params: { minutes: mins } });
       Object.assign(latency, l.data);
     } catch (e) {
       errors.push(`latency: ${e?.message || String(e)}`);
     }
 
+    // 使用实时吞吐趋势接口
     try {
-      const t = await api.get("/stats/timeseries", { params: { minutes: mins } });
+      const t = await api.get("/stats/realtime/timeseries", { params: { minutes: mins } });
       renderTrend(t.data || []);
+      // 更新最后刷新时间
+      lastUpdateTime.value = formatHHmmss(new Date());
     } catch (e) {
       errors.push(`timeseries: ${e?.message || String(e)}`);
     }
 
     try {
-      const b = await api.get("/stats/breakdown", { params: { minutes: mins, by: "tenant" } });
+      const b = await api.get("/stats/realtime/tenants", { params: { minutes: mins } });
       renderTenant(b.data || []);
     } catch (e) {
       errors.push(`breakdown: ${e?.message || String(e)}`);
@@ -570,33 +587,23 @@ async function loadAll() {
 
     error.value = errors.length ? errors.join(" | ") : "";
 
-    // 加载状态统计数据
+    // 加载实时状态统计数据（使用实时接口，数据稳定不浮动）
     try {
-      const ss = await api.get("/stats/state-stats", { params: { minutes: mins } });
-      const stateData = ss.data || {};
-      
-      // 渲染watchState图表
-      if (stateData.watchStates?.length > 0) {
-        renderPieChart(watchStateChart, stateData.watchStates, watchStateColors, 'Kafka接收状态');
-      }
-      
-      // 渲染systemState图表
-      if (stateData.systemStates?.length > 0) {
-        renderPieChart(systemStateChart, stateData.systemStates, systemStateColors, '系统状态');
-      }
-      
-      // 渲染workitemState图表
-      if (stateData.workitemStates?.length > 0) {
-        renderPieChart(workitemStateChart, stateData.workitemStates, workitemStateColors, '工作项状态');
-      }
-      
-      // 渲染消息类型图表
-      if (stateData.messageTypes?.length > 0) {
-        renderBarChart(messageTypeChart, stateData.messageTypes);
+      const ws = await api.get("/stats/realtime/watch-states");
+      if (ws.data?.length > 0) {
+        renderPieChart(watchStateChart, ws.data, watchStateColors, 'Kafka接收状态');
       }
     } catch (e) {
-      // 状态统计失败不影响主流程
-      console.warn('stateStats:', e?.message || String(e));
+      console.warn('watchStates:', e?.message || String(e));
+    }
+
+    try {
+      const mt = await api.get("/stats/realtime/message-types");
+      if (mt.data?.length > 0) {
+        renderBarChart(messageTypeChart, mt.data);
+      }
+    } catch (e) {
+      console.warn('messageTypes:', e?.message || String(e));
     }
   } catch (e) {
     error.value = e?.message || String(e);
@@ -610,7 +617,8 @@ function onTimeRangeChange() {
 
 onMounted(async () => {
   await loadAll();
-  timer = window.setInterval(loadAll, 5000);
+  // 实时刷新：每2秒刷新一次，确保有消息时立即显示
+  timer = window.setInterval(loadAll, 2000);
   window.addEventListener("resize", onResize);
 });
 
@@ -619,8 +627,6 @@ function onResize() {
   tenantChart?.resize();
   sizeChart?.resize();
   watchStateChart?.resize();
-  systemStateChart?.resize();
-  workitemStateChart?.resize();
   messageTypeChart?.resize();
 }
 
@@ -632,8 +638,6 @@ onBeforeUnmount(() => {
   tenantChart?.dispose();
   sizeChart?.dispose();
   watchStateChart?.dispose();
-  systemStateChart?.dispose();
-  workitemStateChart?.dispose();
   messageTypeChart?.dispose();
 });
 </script>
@@ -714,28 +718,49 @@ onBeforeUnmount(() => {
 .text-danger { color: #f56c6c; }
 .text-warning { color: #e6a23c; }
 
-.latency-grid {
+.latency-desc-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  padding: 8px 0;
 }
-.latency-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.latency-tags {
-  display: flex;
-  gap: 8px;
-}
-.latency-label {
+.latency-desc-item {
   font-size: 14px;
   color: #606266;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
+.latency-desc-item .highlight {
+  font-family: Monaco, Consolas, monospace;
+  font-weight: 700;
+  color: #303133;
+  font-size: 16px;
+  margin: 0 4px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot.blue { background: #409eff; }
+.dot.orange { background: #e6a23c; }
+.dot.red { background: #f56c6c; }
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-weight: 600;
+}
+.card-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.update-tag {
+  font-size: 11px;
+  padding: 2px 6px;
+  font-weight: normal;
 }
 </style>

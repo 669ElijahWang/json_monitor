@@ -8,11 +8,11 @@ import org.springframework.stereotype.Component;
  * 消息解析器：从原始 JSON 中抽取监控所需核心字段。
  * 支持两种消息类型：
  * 1. STATE 类型（key以state/开头）- Kafka消息接收状态
- * - watchState: 0=待处理, 1=获取, 2=处理中, 4=处理失败, 5=处理完成
+ * - watchState: 0=初始节点, 1=获取, 2=处理中, 4=处理失败, 5=处理完成
  * 2. AGENT 类型（key以AGENT/开头）- 业务流程节点状态
  * - systemState: WaitForCheckOut, WaitForApply, Running, Suspend, Complete,
  * Terminate, Revoke
- * - workitemState: 1=初始化, 2=待处理, 4=处理中, 5=挂起, 6=完成, 7=已终止
+ * - workitemState: 1=初始化, 2=初始节点, 4=处理中, 5=挂起, 6=完成, 7=已终止
  */
 @Component
 public class MessageParser {
@@ -21,7 +21,7 @@ public class MessageParser {
     public static final String MSG_TYPE_STATE = "STATE";
     public static final String MSG_TYPE_AGENT = "AGENT";
     public static final String MSG_TYPE_COMPETENCE = "COMPETENCE";
-    public static final String MSG_TYPE_TENANT_MESSAGE = "TENANT_MESSAGE";
+    public static final String MSG_TYPE_TENANT_MESSAGE = "TENANT";
     public static final String MSG_TYPE_UNKNOWN = "UNKNOWN";
 
     public MessageParser(ObjectMapper objectMapper) {
@@ -92,7 +92,7 @@ public class MessageParser {
             } else if (MSG_TYPE_COMPETENCE.equals(messageType)) {
                 return parseCompetenceMessage(root, category);
             } else if (MSG_TYPE_TENANT_MESSAGE.equals(messageType)) {
-                return parseTenantMessage(root, category);
+                return parseTenantMessage(root, category, key);
             } else {
                 // 兼容旧格式
                 return parseLegacyMessage(root, category);
@@ -129,12 +129,7 @@ public class MessageParser {
                 null, // systemNo
                 null, // adviseKey
                 nodeName,
-                null, // busId
-                null, // busVer
                 result,
-                null, // produceTimeMs
-                null, // processedTimeMs
-                null, // internalSeconds
                 watchState,
                 serverIp,
                 processId,
@@ -157,17 +152,13 @@ public class MessageParser {
      * competence/SUNYARDBP26011515382155320260127180033346625608/e62a7970-140a-4ef2-8660-f8e317a3a30b
      */
     private ParsedMessage parseCompetenceMessage(JsonNode root, String category) {
-        String errorBusId = text(root, "errorBusId");
-        String errorStartTime = text(root, "errorStartTime");
         String errorCode = text(root, "errorCode");
         String errorType = text(root, "errorType");
         String errorTaskId = text(root, "errorTaskId");
         String errorApp = text(root, "errorApp");
         String errorLevel = text(root, "errorLevel");
-        String errorState = text(root, "errorState");
         String errorInfo = text(root, "errorInfo");
         String errorInterface = text(root, "errorInterface");
-        String errorEtcdKey = text(root, "errorEtcdKey");
         String serverIp = text(root, "serverIp");
 
         // 根据errorLevel决定result
@@ -181,12 +172,7 @@ public class MessageParser {
                 null, // systemNo
                 null, // adviseKey
                 null, // nodeName
-                errorBusId, // busId
-                null, // busVer
                 result,
-                null, // produceTimeMs
-                null, // processedTimeMs
-                null, // internalSeconds
                 null, // watchState
                 serverIp,
                 null, // processId
@@ -213,7 +199,7 @@ public class MessageParser {
      * AGENT/SUNYARDBP26011515382155320260129175254051282744/KAFKA4000/0/5230032/9a11d
      * SUNYARD/SUNYARDBP26011515382155320260129175254051282744/...
      */
-    private ParsedMessage parseTenantMessage(JsonNode root, String category) {
+    private ParsedMessage parseTenantMessage(JsonNode root, String category, String key) {
         String tenant = text(root, "priTenant");
         String taskId = text(root, "taskId");
         String adviseKey = text(root, "adviseKey");
@@ -221,6 +207,10 @@ public class MessageParser {
         JsonNode transRequest = root.path("transRequest");
         String systemNo = text(transRequest, "systemNo");
         String userNo = text(transRequest, "userNo");
+
+        if (systemNo != null) {
+            category = systemNo;
+        }
 
         JsonNode operDetail = transRequest.path("operDetail");
         String nodeName = text(operDetail, "nodeName");
@@ -235,8 +225,6 @@ public class MessageParser {
         if (taskId == null && busTaskId != null) {
             taskId = busTaskId;
         }
-        String busId = text(businessProcess, "busId");
-        String busVer = text(businessProcess, "busVer");
 
         JsonNode systemInfo = root.path("systemInfo");
         String systemState = text(systemInfo, "state");
@@ -247,6 +235,24 @@ public class MessageParser {
             if (!wid.isMissingNode() && !wid.isNull()) {
                 workitemId = wid.isNumber() ? String.valueOf(wid.asLong()) : wid.asText();
             }
+        }
+
+        // 从key提取更多字段
+        // key格式: {TENANT}/{taskId}/{transNo}/{partition}/{workitemId}/{uuid}
+        String transNo = null;
+        String keyWorkitemId = null;
+        if (key != null) {
+            String[] parts = key.split("/");
+            if (parts.length >= 3) {
+                transNo = parts[2];
+            }
+            if (parts.length >= 5) {
+                keyWorkitemId = parts[4];
+            }
+        }
+
+        if (workitemId == null) {
+            workitemId = keyWorkitemId;
         }
 
         // 根据systemState和workitemState决定result
@@ -260,17 +266,12 @@ public class MessageParser {
                 systemNo,
                 adviseKey,
                 nodeName,
-                busId,
-                busVer,
                 result,
-                null, // produceTimeMs
-                null, // processedTimeMs
-                null, // internalSeconds
                 null, // watchState
                 null, // serverIp
                 processId,
                 workitemId,
-                null, // transNo
+                transNo,
                 null, null, null, null, null, // errorCode, errorType, errorLevel, errorInfo, errorInterface
                 systemState,
                 workitemState,
@@ -287,16 +288,10 @@ public class MessageParser {
         String tenant = text(root, "priTenant");
         String taskId = text(root, "taskId");
         String adviseKey = text(root, "adviseKey");
-        Long produceTimeMs = longValue(root, "produceTime");
-        Long processedTimeMs = longValue(root, "processedTime");
-        Double internalSeconds = doubleValue(root, "internalSeconds");
 
         JsonNode transRequest = root.path("transRequest");
         String systemNo = text(transRequest, "systemNo");
         String nodeName = text(transRequest.path("operDetail"), "nodeName");
-        JsonNode businessProcess = transRequest.path("businessProcess");
-        String busId = text(businessProcess, "busId");
-        String busVer = text(businessProcess, "busVer");
 
         String result = text(root, "result");
         if (result == null || result.isBlank()) {
@@ -314,12 +309,7 @@ public class MessageParser {
                 systemNo,
                 adviseKey,
                 nodeName,
-                busId,
-                busVer,
                 result,
-                produceTimeMs,
-                processedTimeMs,
-                internalSeconds,
                 null, null, null, null, null, // watchState, serverIp, processId, workitemId, transNo
                 null, null, null, null, null, // errorCode, errorType, errorLevel, errorInfo, errorInterface
                 null, null, null, null, null, null); // systemState, workitemState, userNo, startTime, checkOutTime,
@@ -334,7 +324,7 @@ public class MessageParser {
             return "UNKNOWN";
         switch (watchState) {
             case "0":
-                return "PENDING"; // 待处理
+                return "PENDING"; // 初始节点
             case "1":
                 return "ACQUIRED"; // 获取
             case "2":
@@ -377,7 +367,7 @@ public class MessageParser {
                 case "1":
                     return "INIT"; // 初始化
                 case "2":
-                    return "PENDING"; // 待处理
+                    return "PENDING"; // 初始节点
                 case "4":
                     return "PROCESSING"; // 处理中
                 case "5":
@@ -395,8 +385,7 @@ public class MessageParser {
         return new ParsedMessage(
                 messageType,
                 category,
-                "UNKNOWN", null, null, null, null, null, null, "PARSE_ERROR",
-                null, null, null,
+                "UNKNOWN", null, null, null, null, "PARSE_ERROR",
                 null, null, null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, null, null);

@@ -15,8 +15,8 @@ import java.util.Map;
 /**
  * 统计服务：对存储消息做窗口统计与聚合。
  * 提供：
- * - overview：窗口内总数、成功/失败
- * - timeseries：按分钟的吞吐/成功/失败/超时
+ * - overview：窗口内总数、State、Competence、Tenant计数
+ * - timeseries：按分钟的吞吐，分State/Competence/Tenant(Top)
  * - breakdown：按租户/系统拆分计数 Top
  * - latency：窗口内延迟的 p50/p95/p99/平均
  */
@@ -33,20 +33,39 @@ public class StatsService {
     public Map<String, Object> overview(int minutes) {
         Instant to = Instant.now();
         Instant from = to.minus(minutes, ChronoUnit.MINUTES);
-
         String window = minutes + "m";
-        Double total = prometheus.queryScalar("sum(increase(msg_consumed_total[" + window + "]))");
-        Double success = prometheus
-                .queryScalar("sum(increase(msg_consumed_total{result=\"SUCCESS\"}[" + window + "]))");
-        Double fail = prometheus.queryScalar("sum(increase(msg_consumed_total{result=\"FAIL\"}[" + window + "]))");
+
+        // Use 'count' of unique task series to match the 'Message Search' list count
+        // and avoid counting retries/duplicates or raw throughput.
+        String q = "count(max_over_time(msg_task_last_seen_seconds[" + window + "])) by (category)";
+        List<PrometheusQueryService.SeriesPoint> points = prometheus.queryVector(q);
+
+        double total = 0;
+        double state = 0;
+        double competence = 0;
+        double tenant = 0;
+
+        for (PrometheusQueryService.SeriesPoint p : points) {
+            String category = p.getMetric().getOrDefault("category", "unknown");
+            double val = p.getValue();
+            total += val;
+            if ("state".equalsIgnoreCase(category)) {
+                state += val;
+            } else if ("competence".equalsIgnoreCase(category)) {
+                competence += val;
+            } else {
+                tenant += val;
+            }
+        }
 
         Map<String, Object> result = new HashMap<>();
         result.put("window", window);
         result.put("from", from.toString());
         result.put("to", to.toString());
         result.put("messages", toLongOrZero(total));
-        result.put("success", toLongOrZero(success));
-        result.put("fail", toLongOrZero(fail));
+        result.put("state", toLongOrZero(state));
+        result.put("competence", toLongOrZero(competence));
+        result.put("tenant", toLongOrZero(tenant));
         return result;
     }
 
@@ -58,26 +77,53 @@ public class StatsService {
         long endEpoch = truncateToMinute(to).getEpochSecond();
         String step = "60";
 
-        String totalQ = "sum(increase(msg_consumed_total[1m]))";
-        String successQ = "sum(increase(msg_consumed_total{result=\"SUCCESS\"}[1m]))";
-        String failQ = "sum(increase(msg_consumed_total{result=\"FAIL\"}[1m]))";
-        String timeoutQ = "sum(increase(msg_timeout_total[1m]))";
+        // Revert to 'increase' to show usage SPIKES per minute (Throughput), not
+        // 'active' states.
+        // sum(increase(...[1m])) gives the total count of events in that minute.
+        // If there are 4 events in a burst, this will show a value of ~4 for that
+        // minute point.
+        // If no events, it shows 0.
+        String q = "sum(increase(msg_by_category_total[1m])) by (category)";
+        List<PrometheusQueryService.SeriesData> seriesList = prometheus.queryRangeMultiSeries(q, startEpoch, endEpoch,
+                step);
 
-        Map<Long, Double> total = prometheus.queryRangeSingleSeries(totalQ, startEpoch, endEpoch, step);
-        Map<Long, Double> success = prometheus.queryRangeSingleSeries(successQ, startEpoch, endEpoch, step);
-        Map<Long, Double> fail = prometheus.queryRangeSingleSeries(failQ, startEpoch, endEpoch, step);
-        Map<Long, Double> timeout = prometheus.queryRangeSingleSeries(timeoutQ, startEpoch, endEpoch, step);
+        String timeoutQ = "sum(increase(msg_timeout_total[1m]))";
+        Map<Long, Double> timeoutMap = prometheus.queryRangeSingleSeries(timeoutQ, startEpoch, endEpoch, step);
 
         List<Map<String, Object>> out = new ArrayList<>(timeline.size());
+
         for (Instant ts : timeline) {
             long key = truncateToMinute(ts).getEpochSecond();
             Map<String, Object> row = new HashMap<>();
             row.put("ts", ts.toString());
-            row.put("total", toLongOrZero(total.get(key)));
-            row.put("success", toLongOrZero(success.get(key)));
-            row.put("fail", toLongOrZero(fail.get(key)));
-            row.put("timeout", toLongOrZero(timeout.get(key)));
-            row.put("other", 0);
+
+            double total = 0;
+            double state = 0;
+            double competence = 0;
+            double tenant = 0;
+
+            for (PrometheusQueryService.SeriesData s : seriesList) {
+                String cat = s.getMetric().getOrDefault("category", "unknown");
+                Double val = s.getValues().get(key);
+                long v = toLongOrZero(val);
+
+                if (v > 0) {
+                    total += v;
+                    if ("state".equalsIgnoreCase(cat)) {
+                        state += v;
+                    } else if ("competence".equalsIgnoreCase(cat)) {
+                        competence += v;
+                    } else {
+                        tenant += v;
+                    }
+                }
+            }
+
+            row.put("total", (long) total);
+            row.put("state", (long) state);
+            row.put("competence", (long) competence);
+            row.put("tenant", (long) tenant);
+            row.put("timeout", toLongOrZero(timeoutMap.get(key)));
             out.add(row);
         }
         return out;
@@ -85,22 +131,41 @@ public class StatsService {
 
     public List<Map<String, Object>> breakdown(int minutes, String by) {
         String window = minutes + "m";
-        String label = "tenant";
+        String label = "tenant"; // default
+        String metric = "msg_task_last_seen_seconds";
+
         if ("system".equalsIgnoreCase(by) || "systemNo".equalsIgnoreCase(by)) {
             label = "system";
+        } else if ("category".equalsIgnoreCase(by)) {
+            label = "category";
         }
 
-        String q = "topk(20, sum(increase(msg_consumed_total[" + window + "])) by (" + label + "))";
+        // When grouping by "tenant", we actually want to group by "category" (e.g.
+        // SUNYARD, AGENT)
+        // BUT strictly exclude "state" and "competence".
+        String effectiveLabel = label;
+        String selector = "";
+
+        if ("tenant".equals(label)) {
+            effectiveLabel = "category";
+            selector = "{category!=\"state\",category!=\"competence\"}";
+        }
+
+        // Use topk on count of unique series in the window for "Tenant" messages only
+        String q = "topk(20, count(max_over_time(" + metric + selector + "[" + window + "])) by (" + effectiveLabel
+                + "))";
+
         List<PrometheusQueryService.SeriesPoint> series = prometheus.queryVector(q);
 
         List<Map<String, Object>> out = new ArrayList<>(series.size());
         for (PrometheusQueryService.SeriesPoint sp : series) {
-            String name = sp.getMetric().getOrDefault(label, "unknown");
+            String name = sp.getMetric().getOrDefault(effectiveLabel, "unknown");
             Map<String, Object> row = new HashMap<>();
             row.put("name", name);
             row.put("count", toLongOrZero(sp.getValue()));
             out.add(row);
         }
+        out.sort((a, b) -> Long.compare((Long) b.get("count"), (Long) a.get("count")));
         return out;
     }
 
@@ -158,37 +223,28 @@ public class StatsService {
         return out;
     }
 
-    /**
-     * 状态统计：返回消息类型分布、watchState分布、systemState分布、workitemState分布
-     */
     public Map<String, Object> stateStats(int minutes) {
         String window = minutes + "m";
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("window", window);
         out.put("serverTimeMs", System.currentTimeMillis());
 
-        // 消息类型分布
         List<Map<String, Object>> messageTypes = queryLabelDistribution("msg_by_type_total", "messageType", window);
         out.put("messageTypes", messageTypes);
 
-        // watchState分布（STATE类型消息的Kafka接收状态）
         List<Map<String, Object>> watchStates = queryLabelDistribution("msg_watch_state_total", "watchState", window);
-        // 添加状态描述
         for (Map<String, Object> ws : watchStates) {
             String state = String.valueOf(ws.get("name"));
             ws.put("desc", getWatchStateDesc(state));
         }
         out.put("watchStates", watchStates);
 
-        // systemState分布（AGENT类型消息的系统状态）
         List<Map<String, Object>> systemStates = queryLabelDistribution("msg_system_state_total", "systemState",
                 window);
         out.put("systemStates", systemStates);
 
-        // workitemState分布（AGENT类型消息的工作项状态）
         List<Map<String, Object>> workitemStates = queryLabelDistribution("msg_workitem_state_total", "workitemState",
                 window);
-        // 添加状态描述
         for (Map<String, Object> ws : workitemStates) {
             String state = String.valueOf(ws.get("name"));
             ws.put("desc", getWorkitemStateDesc(state));
@@ -210,7 +266,6 @@ public class StatsService {
             row.put("count", toLongOrZero(sp.getValue()));
             out.add(row);
         }
-        // 按count降序排序
         out.sort((a, b) -> Long.compare((Long) b.get("count"), (Long) a.get("count")));
         return out;
     }
@@ -220,7 +275,7 @@ public class StatsService {
             return "";
         switch (state) {
             case "0":
-                return "待处理";
+                return "初始节点";
             case "1":
                 return "获取";
             case "2":
@@ -241,7 +296,7 @@ public class StatsService {
             case "1":
                 return "初始化";
             case "2":
-                return "待处理";
+                return "初始节点";
             case "4":
                 return "处理中";
             case "5":
@@ -293,16 +348,14 @@ public class StatsService {
     }
 
     private static long toLongOrZero(Double v) {
-        if (v == null || Double.isNaN(v) || Double.isInfinite(v)) {
+        if (v == null || Double.isNaN(v) || Double.isInfinite(v))
             return 0;
-        }
         return Math.max(0, Math.round(v));
     }
 
     private static Double secondsToSecOrNull(Double seconds) {
-        if (seconds == null || Double.isNaN(seconds) || Double.isInfinite(seconds)) {
+        if (seconds == null || Double.isNaN(seconds) || Double.isInfinite(seconds))
             return null;
-        }
         double v = Math.max(0, seconds);
         return Math.round(v * 1000.0) / 1000.0;
     }

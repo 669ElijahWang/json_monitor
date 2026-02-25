@@ -27,16 +27,13 @@
         </el-menu-item>
         <el-menu-item index="/pending">
           <el-icon><Timer /></el-icon>
-          <span>挂起任务</span>
+          <span>Kafka健康</span>
         </el-menu-item>
         <el-menu-item index="/trace">
           <el-icon><Connection /></el-icon>
           <span>链路追踪</span>
         </el-menu-item>
-        <el-menu-item index="/grafana">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>Grafana</span>
-        </el-menu-item>
+
         <el-menu-item index="/alerts">
           <el-icon><Bell /></el-icon>
           <span>告警规则</span>
@@ -71,7 +68,6 @@ import {
   Box,
   Timer,
   Connection,
-  DataAnalysis,
   Bell
 } from "@element-plus/icons-vue";
 
@@ -81,9 +77,8 @@ const title = computed(() => {
     "/dashboard": "仪表盘",
     "/messages": "消息搜索",
     "/backlog": "积压消息",
-    "/pending": "挂起任务",
+    "/pending": "Kafka健康",
     "/trace": "链路追踪",
-    "/grafana": "Grafana",
     "/alerts": "告警规则"
   };
   return map[route.path] || "Kafka 流程监控";

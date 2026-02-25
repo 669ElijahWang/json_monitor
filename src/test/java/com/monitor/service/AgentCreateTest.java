@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class AgentCreateTest {
 
-    private static final String BASE_URL = "http://localhost:8086";
+    private static final String BASE_URL = "http://localhost:8076";
     private static final String CREATE_ENDPOINT = "/agent/create";
     
     private RestTemplate restTemplate;

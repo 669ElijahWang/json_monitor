@@ -5,33 +5,12 @@
       type="error"
       show-icon
       :closable="false"
-      title="挂起任务加载失败"
+      title="Kafka健康数据加载失败"
       :description="error"
       style="margin-bottom: 12px"
     />
 
-    <el-card>
-      <el-form :inline="true" @submit.prevent>
-        <el-form-item label="expected(s)">
-          <el-input-number v-model="filters.expectedSeconds" :min="1" :max="86400" style="width: 160px" />
-        </el-form-item>
-        <el-form-item label="window(min)">
-          <el-input-number v-model="filters.minutes" :min="1" :max="21600" style="width: 160px" />
-        </el-form-item>
-        <el-form-item label="size">
-          <el-input-number v-model="filters.size" :min="1" :max="500" style="width: 140px" />
-        </el-form-item>
-        <el-form-item label="taskId contains">
-          <el-input v-model="filters.q" placeholder="可选" style="width: 220px" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="load">刷新</el-button>
-        </el-form-item>
-        <el-form-item>
-          <div style="color: #666">当前挂起：{{ total }}</div>
-        </el-form-item>
-      </el-form>
-    </el-card>
+
 
     <el-alert
       v-if="baseHealthError"
@@ -79,28 +58,7 @@
       </div>
     </el-card>
 
-    <el-card style="margin-top: 16px">
-      <template #header>只有开始节点且超时未进入后续节点</template>
-      <el-table :data="rows" style="width: 100%">
-        <el-table-column prop="waitSeconds" label="wait" width="120" :formatter="formatWaitCell" />
-        <el-table-column prop="startSeenAt" label="startSeenAt" width="210" :formatter="formatIsoCell" />
-        <el-table-column prop="tenant" label="tenant" width="120" />
-        <el-table-column prop="systemNo" label="system" width="120" />
-        <el-table-column prop="startNodeName" label="startNode" width="140" />
-        <el-table-column prop="adviseKey" label="eventType" width="160" />
-        <el-table-column prop="busId" label="busId" width="140" />
-        <el-table-column prop="taskId" label="taskId" min-width="260">
-          <template #default="{ row }">
-            <div style="display: flex; gap: 8px; align-items: center">
-              <el-button size="small" @click="goTrace(row.taskId)">追踪</el-button>
-              <span style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace">
-                {{ row.taskId }}
-              </span>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+
   </div>
 </template>
 

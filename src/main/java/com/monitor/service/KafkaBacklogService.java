@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  * - 计算 lag = endOffset - committedOffset，并抽样读取部分消息用于页面展示
  *
  * 定时指标：
- * - 通过 @Scheduled 周期性刷新“最老未消费消息年龄”到 Micrometer，便于 Prometheus/Grafana 展示
+ * - 通过 @Scheduled 周期性刷新“最老未消费消息年龄”到 Micrometer，便于 Prometheus 展示
  */
 @Service
 public class KafkaBacklogService {
@@ -42,15 +42,29 @@ public class KafkaBacklogService {
     private final boolean backlogMetricsEnabled;
 
     public KafkaBacklogService(@Value("${spring.kafka.bootstrap-servers:localhost:9092}") String bootstrapServers,
-                               @Value("${monitor.kafka.main.topic:monitor-topic}") String defaultTopic,
-                               @Value("${monitor.kafka.main.group-id:monitor-main-group}") String defaultGroupId,
-                               MetricsService metrics,
-                               @Value("${monitor.backlog.metrics-enabled:true}") boolean backlogMetricsEnabled) {
+            @Value("${monitor.kafka.main.topic:monitor-topic}") String defaultTopic,
+            @Value("${monitor.kafka.main.group-id:monitor-main-group}") String defaultGroupId,
+            MetricsService metrics,
+            @Value("${monitor.backlog.metrics-enabled:true}") boolean backlogMetricsEnabled) {
         this.bootstrapServers = bootstrapServers;
         this.defaultTopic = defaultTopic;
         this.defaultGroupId = defaultGroupId;
         this.metrics = metrics;
         this.backlogMetricsEnabled = backlogMetricsEnabled;
+    }
+
+    private AdminClient sharedAdminClient;
+
+    private synchronized AdminClient getAdminClient() {
+        if (sharedAdminClient == null) {
+            Properties props = new Properties();
+            props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+            props.put(AdminClientConfig.CLIENT_ID_CONFIG, "monitor-backlog-admin-shared");
+            props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, "2000"); // 降低请求超时
+            props.put(AdminClientConfig.RETRIES_CONFIG, 1);
+            sharedAdminClient = AdminClient.create(props);
+        }
+        return sharedAdminClient;
     }
 
     public Map<String, Object> backlog(String topic, String groupId, int limit) {
@@ -65,10 +79,10 @@ public class KafkaBacklogService {
         out.put("limit", safeLimit);
         out.put("serverTimeMs", nowMs);
 
-        try (AdminClient admin = AdminClient.create(adminProps());
-             KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps())) {
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps())) {
+            AdminClient admin = getAdminClient();
 
-            List<PartitionInfo> partitionInfos = consumer.partitionsFor(safeTopic, Duration.ofSeconds(3));
+            List<PartitionInfo> partitionInfos = consumer.partitionsFor(safeTopic, Duration.ofSeconds(2)); // 降低超时
             if (partitionInfos == null || partitionInfos.isEmpty()) {
                 out.put("partitions", Collections.emptyList());
                 out.put("totalLag", 0L);
@@ -82,21 +96,24 @@ public class KafkaBacklogService {
             }
             partitions.sort(Comparator.comparingInt(TopicPartition::partition));
 
+            // 获取消费组 Offset
             Map<TopicPartition, OffsetAndMetadata> committedOffsets = admin
                     .listConsumerGroupOffsets(safeGroupId)
                     .partitionsToOffsetAndMetadata()
                     .toCompletionStage()
                     .toCompletableFuture()
-                    .get(5, TimeUnit.SECONDS);
+                    .get(2, TimeUnit.SECONDS); // 降低超时
 
             consumer.assign(partitions);
-            consumer.poll(Duration.ofMillis(0));
+            // 这里不需要 poll(0)，因为后面会 seek
+
+            // 获取首尾 Offset
             Map<TopicPartition, Long> beginningOffsets = new HashMap<>();
             try {
-                beginningOffsets = consumer.beginningOffsets(partitions, Duration.ofSeconds(5));
+                beginningOffsets = consumer.beginningOffsets(partitions, Duration.ofSeconds(2)); // 降低超时
             } catch (Exception ignored) {
             }
-            Map<TopicPartition, Long> endOffsets = consumer.endOffsets(partitions, Duration.ofSeconds(5));
+            Map<TopicPartition, Long> endOffsets = consumer.endOffsets(partitions, Duration.ofSeconds(2)); // 降低超时
 
             List<Map<String, Object>> partitionRows = new ArrayList<>(partitions.size());
             long totalLag = 0;
@@ -112,6 +129,10 @@ public class KafkaBacklogService {
                 long effectiveStart = Math.max(beginning, committed);
                 if (effectiveStart < end) {
                     effectiveStartByPartition.put(tp.partition(), effectiveStart);
+                    consumer.seek(tp, effectiveStart);
+                } else {
+                    // 没有积压的分区，seek 到末尾，避免 poll 到老数据
+                    consumer.seek(tp, end);
                 }
 
                 Map<String, Object> row = new LinkedHashMap<>();
@@ -123,40 +144,38 @@ public class KafkaBacklogService {
                 partitionRows.add(row);
             }
 
-            for (TopicPartition tp : partitions) {
-                OffsetAndMetadata om = committedOffsets.get(tp);
-                long committed = om == null ? 0L : Math.max(0L, om.offset());
-                long beginning = beginningOffsets.getOrDefault(tp, 0L);
-                consumer.seek(tp, Math.max(beginning, committed));
-            }
-
             List<Map<String, Object>> records = new ArrayList<>(safeLimit);
             Map<Integer, Long> oldestTsByPartition = new HashMap<>();
             Map<Integer, Long> oldestOffsetByPartition = new HashMap<>();
-            int polls = 0;
+
+            // 只有当存在积压时才进行 poll 采样，否则直接跳过
             int expectedOldestCount = effectiveStartByPartition.size();
-            while ((records.size() < safeLimit || oldestTsByPartition.size() < expectedOldestCount) && polls < 10) {
-                polls++;
-                for (ConsumerRecord<String, String> r : consumer.poll(Duration.ofMillis(300))) {
-                    Map<String, Object> row = new HashMap<>();
-                    row.put("topic", r.topic());
-                    row.put("partition", r.partition());
-                    row.put("offset", r.offset());
-                    row.put("timestamp", r.timestamp());
-                    row.put("key", r.key());
-                    row.put("value", truncate(r.value(), 2000));
-                    if (records.size() < safeLimit) {
-                        records.add(row);
-                    }
+            if (expectedOldestCount > 0) {
+                int polls = 0;
+                while ((records.size() < safeLimit || oldestTsByPartition.size() < expectedOldestCount) && polls < 10) {
+                    polls++;
+                    for (ConsumerRecord<String, String> r : consumer.poll(Duration.ofMillis(300))) {
+                        Map<String, Object> row = new HashMap<>();
+                        row.put("topic", r.topic());
+                        row.put("partition", r.partition());
+                        row.put("offset", r.offset());
+                        row.put("timestamp", r.timestamp());
+                        row.put("key", r.key());
+                        row.put("value", truncate(r.value(), 2000));
+                        if (records.size() < safeLimit) {
+                            records.add(row);
+                        }
 
-                    long desired = effectiveStartByPartition.getOrDefault(r.partition(), Long.MIN_VALUE);
-                    if (desired != Long.MIN_VALUE && !oldestTsByPartition.containsKey(r.partition()) && r.offset() >= desired) {
-                        oldestTsByPartition.put(r.partition(), r.timestamp());
-                        oldestOffsetByPartition.put(r.partition(), r.offset());
-                    }
+                        long desired = effectiveStartByPartition.getOrDefault(r.partition(), Long.MIN_VALUE);
+                        if (desired != Long.MIN_VALUE && !oldestTsByPartition.containsKey(r.partition())
+                                && r.offset() >= desired) {
+                            oldestTsByPartition.put(r.partition(), r.timestamp());
+                            oldestOffsetByPartition.put(r.partition(), r.offset());
+                        }
 
-                    if (records.size() >= safeLimit && oldestTsByPartition.size() >= expectedOldestCount) {
-                        break;
+                        if (records.size() >= safeLimit && oldestTsByPartition.size() >= expectedOldestCount) {
+                            break;
+                        }
                     }
                 }
             }
@@ -229,11 +248,11 @@ public class KafkaBacklogService {
     }
 
     public Map<String, Object> backlogRecords(String topic,
-                                              String groupId,
-                                              int partition,
-                                              Long startOffset,
-                                              int limit,
-                                              int maxValueLen) {
+            String groupId,
+            int partition,
+            Long startOffset,
+            int limit,
+            int maxValueLen) {
         String safeTopic = (topic == null || topic.isBlank()) ? defaultTopic : topic.trim();
         String safeGroupId = (groupId == null || groupId.isBlank()) ? defaultGroupId : groupId.trim();
         int safeLimit = clamp(limit, 1, 1000);
@@ -249,10 +268,10 @@ public class KafkaBacklogService {
 
         TopicPartition tp = new TopicPartition(safeTopic, partition);
 
-        try (AdminClient admin = AdminClient.create(adminProps());
-             KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps())) {
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps())) {
+            AdminClient admin = getAdminClient();
 
-            List<PartitionInfo> partitionInfos = consumer.partitionsFor(safeTopic, Duration.ofSeconds(3));
+            List<PartitionInfo> partitionInfos = consumer.partitionsFor(safeTopic, Duration.ofSeconds(2));
             boolean partitionExists = false;
             if (partitionInfos != null) {
                 for (PartitionInfo pi : partitionInfos) {
@@ -274,19 +293,20 @@ public class KafkaBacklogService {
                     .partitionsToOffsetAndMetadata()
                     .toCompletionStage()
                     .toCompletableFuture()
-                    .get(5, TimeUnit.SECONDS);
+                    .get(2, TimeUnit.SECONDS);
 
             consumer.assign(Collections.singletonList(tp));
-            consumer.poll(Duration.ofMillis(0));
 
-            Map<TopicPartition, Long> endOffsets = consumer.endOffsets(Collections.singletonList(tp), Duration.ofSeconds(5));
+            Map<TopicPartition, Long> endOffsets = consumer.endOffsets(Collections.singletonList(tp),
+                    Duration.ofSeconds(2));
             long endOffset = endOffsets.getOrDefault(tp, 0L);
             OffsetAndMetadata om = committedOffsets.get(tp);
             long committed = om == null ? 0L : Math.max(0L, om.offset());
 
             long beginningOffset = 0L;
             try {
-                Map<TopicPartition, Long> beginningOffsets = consumer.beginningOffsets(Collections.singletonList(tp));
+                Map<TopicPartition, Long> beginningOffsets = consumer.beginningOffsets(Collections.singletonList(tp),
+                        Duration.ofSeconds(2));
                 beginningOffset = beginningOffsets.getOrDefault(tp, 0L);
             } catch (Exception ignored) {
             }
@@ -311,7 +331,7 @@ public class KafkaBacklogService {
             List<Map<String, Object>> records = new ArrayList<>(Math.min(safeLimit, 200));
             long nextOffset = effectiveStart;
             int polls = 0;
-            while (records.size() < safeLimit && polls < 20) {
+            while (records.size() < safeLimit && polls < 10) { // 减少 poll 次数
                 polls++;
                 int addedThisPoll = 0;
                 for (ConsumerRecord<String, String> r : consumer.poll(Duration.ofMillis(300))) {
@@ -366,14 +386,16 @@ public class KafkaBacklogService {
         props.put("key.deserializer", StringDeserializer.class.getName());
         props.put("value.deserializer", StringDeserializer.class.getName());
         props.put("max.poll.records", "500");
-        props.put("request.timeout.ms", "5000");
-        props.put("default.api.timeout.ms", "5000");
+        props.put("request.timeout.ms", "2000"); // 降低
+        props.put("default.api.timeout.ms", "2000"); // 降低
         return props;
     }
 
     private static int clamp(int v, int min, int max) {
-        if (v < min) return min;
-        if (v > max) return max;
+        if (v < min)
+            return min;
+        if (v > max)
+            return max;
         return v;
     }
 

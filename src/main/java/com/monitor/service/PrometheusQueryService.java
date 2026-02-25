@@ -24,7 +24,7 @@ public class PrometheusQueryService {
     private final String baseUrl;
 
     public PrometheusQueryService(RestTemplateBuilder restTemplateBuilder,
-                                 @Value("${monitor.prometheus.base-url:http://localhost:9090}") String baseUrl) {
+            @Value("${monitor.prometheus.base-url:http://localhost:9090}") String baseUrl) {
         this.restTemplate = restTemplateBuilder
                 .setConnectTimeout(Duration.ofSeconds(3))
                 .setReadTimeout(Duration.ofSeconds(8))
@@ -82,7 +82,8 @@ public class PrometheusQueryService {
         return out;
     }
 
-    public Map<Long, Double> queryRangeSingleSeries(String promql, long startEpochSeconds, long endEpochSeconds, String stepSeconds) {
+    public Map<Long, Double> queryRangeSingleSeries(String promql, long startEpochSeconds, long endEpochSeconds,
+            String stepSeconds) {
         Map<String, Object> body;
         try {
             String url = trimTrailingSlash(baseUrl)
@@ -217,6 +218,63 @@ public class PrometheusQueryService {
         return parseValuePair(valueObj);
     }
 
+    public List<SeriesData> queryRangeMultiSeries(String promql, long startEpochSeconds, long endEpochSeconds,
+            String stepSeconds) {
+        Map<String, Object> body;
+        try {
+            String url = trimTrailingSlash(baseUrl)
+                    + "/api/v1/query_range?query=" + encode(promql)
+                    + "&start=" + startEpochSeconds
+                    + "&end=" + endEpochSeconds
+                    + "&step=" + encode(stepSeconds);
+            URI uri = URI.create(url);
+            ResponseEntity<Map> resp = restTemplate.getForEntity(uri, Map.class);
+            body = resp.getBody();
+        } catch (Exception e) {
+            return Collections.emptyList();
+        }
+        if (body == null) {
+            return Collections.emptyList();
+        }
+        Object status = body.get("status");
+        if (!Objects.equals("success", status)) {
+            return Collections.emptyList();
+        }
+
+        Map<String, Object> data = castMap(body.get("data"));
+        if (data == null) {
+            return Collections.emptyList();
+        }
+        Object resultObj = data.get("result");
+        if (!(resultObj instanceof List)) {
+            return Collections.emptyList();
+        }
+        List<?> results = (List<?>) resultObj;
+
+        List<SeriesData> out = new ArrayList<>();
+        for (Object item : results) {
+            Map<String, Object> m = castMap(item);
+            if (m == null)
+                continue;
+
+            Map<String, String> metric = castStringMap(m.get("metric"));
+            Object valuesObj = m.get("values");
+
+            Map<Long, Double> values = new LinkedHashMap<>();
+            if (valuesObj instanceof List) {
+                for (Object pair : (List<?>) valuesObj) {
+                    Long ts = parseTimestamp(pair);
+                    Double val = parseValuePairSecond(pair);
+                    if (ts != null && val != null) {
+                        values.put(ts, val);
+                    }
+                }
+            }
+            out.add(new SeriesData(metric == null ? Collections.emptyMap() : metric, values));
+        }
+        return out;
+    }
+
     public static class SeriesPoint {
         private final Map<String, String> metric;
         private final Double value;
@@ -232,6 +290,24 @@ public class PrometheusQueryService {
 
         public Double getValue() {
             return value;
+        }
+    }
+
+    public static class SeriesData {
+        private final Map<String, String> metric;
+        private final Map<Long, Double> values;
+
+        public SeriesData(Map<String, String> metric, Map<Long, Double> values) {
+            this.metric = metric;
+            this.values = values;
+        }
+
+        public Map<String, String> getMetric() {
+            return metric;
+        }
+
+        public Map<Long, Double> getValues() {
+            return values;
         }
     }
 }

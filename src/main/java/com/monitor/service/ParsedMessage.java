@@ -3,13 +3,13 @@ package com.monitor.service;
 /**
  * 解析后的消息对象，支持多种消息类型：
  * 1. STATE 类型（state/开头）- Kafka消息接收状态
- * - watchState: 0=待处理, 1=获取, 2=处理中, 4=处理失败, 5=处理完成
+ * - watchState: 0=初始节点, 1=获取, 2=处理中, 4=处理失败, 5=处理完成
  * 2. COMPETENCE 类型（competence/开头）- 异常消息
  * - errorCode, errorType, errorLevel, errorInfo, errorInterface
  * 3. TENANT_MESSAGE 类型（SUNYARD/AGENT/其他租户开头）- 租户业务消息
  * - systemState: WaitForCheckOut, WaitForApply, Running, Suspend, Complete,
  * Terminate, Revoke
- * - workitemState: 1=初始化, 2=待处理, 4=处理中, 5=挂起, 6=完成, 7=已终止
+ * - workitemState: 1=初始化, 2=初始节点, 4=处理中, 5=挂起, 6=完成, 7=已终止
  */
 public class ParsedMessage {
     /** 消息类型：STATE/COMPETENCE/TENANT_MESSAGE/UNKNOWN */
@@ -21,15 +21,10 @@ public class ParsedMessage {
     private final String systemNo;
     private final String adviseKey;
     private final String nodeName;
-    private final String busId;
-    private final String busVer;
     private final String result;
-    private final Long produceTimeMs;
-    private final Long processedTimeMs;
-    private final Double internalSeconds;
 
     // STATE消息特有字段
-    /** Kafka消息接收状态：0=待处理, 1=获取, 2=处理中, 4=处理失败, 5=处理完成 */
+    /** Kafka消息接收状态：0=初始节点, 1=获取, 2=处理中, 4=处理失败, 5=处理完成 */
     private final String watchState;
     private final String serverIp;
     private final String processId;
@@ -49,7 +44,7 @@ public class ParsedMessage {
      * Terminate, Revoke
      */
     private final String systemState;
-    /** operDetail.workitemstate：1=初始化, 2=待处理, 4=处理中, 5=挂起, 6=完成, 7=已终止 */
+    /** operDetail.workitemstate：1=初始化, 2=初始节点, 4=处理中, 5=挂起, 6=完成, 7=已终止 */
     private final String workitemState;
     private final String userNo;
     private final String startTime;
@@ -63,12 +58,7 @@ public class ParsedMessage {
             String systemNo,
             String adviseKey,
             String nodeName,
-            String busId,
-            String busVer,
             String result,
-            Long produceTimeMs,
-            Long processedTimeMs,
-            Double internalSeconds,
             String watchState,
             String serverIp,
             String processId,
@@ -92,12 +82,7 @@ public class ParsedMessage {
         this.systemNo = systemNo;
         this.adviseKey = adviseKey;
         this.nodeName = nodeName;
-        this.busId = busId;
-        this.busVer = busVer;
         this.result = result;
-        this.produceTimeMs = produceTimeMs;
-        this.processedTimeMs = processedTimeMs;
-        this.internalSeconds = internalSeconds;
         this.watchState = watchState;
         this.serverIp = serverIp;
         this.processId = processId;
@@ -144,28 +129,8 @@ public class ParsedMessage {
         return nodeName;
     }
 
-    public String getBusId() {
-        return busId;
-    }
-
-    public String getBusVer() {
-        return busVer;
-    }
-
     public String getResult() {
         return result;
-    }
-
-    public Long getProduceTimeMs() {
-        return produceTimeMs;
-    }
-
-    public Long getProcessedTimeMs() {
-        return processedTimeMs;
-    }
-
-    public Double getInternalSeconds() {
-        return internalSeconds;
     }
 
     public String getWatchState() {
@@ -240,7 +205,7 @@ public class ParsedMessage {
             return null;
         switch (watchState) {
             case "0":
-                return "待处理";
+                return "初始节点";
             case "1":
                 return "获取";
             case "2":
@@ -264,7 +229,7 @@ public class ParsedMessage {
             case "1":
                 return "初始化";
             case "2":
-                return "待处理";
+                return "初始节点";
             case "4":
                 return "处理中";
             case "5":

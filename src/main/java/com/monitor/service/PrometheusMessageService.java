@@ -13,52 +13,62 @@ import java.util.Map;
 @Service
 public class PrometheusMessageService {
     private final PrometheusQueryService prometheus;
+    private final MessageRawStoreService rawStore;
 
-    public PrometheusMessageService(PrometheusQueryService prometheus) {
+    public PrometheusMessageService(PrometheusQueryService prometheus, MessageRawStoreService rawStore) {
         this.prometheus = prometheus;
+        this.rawStore = rawStore;
     }
 
     public Map<String, Object> search(String q,
-            String tenant,
-            String systemNo,
-            String busId,
+            String category,
+            String nodeName,
             String taskId,
             int minutes,
             int page,
             int size) {
-        int safeMinutes = clamp(minutes, 1, 60 * 24 * 15);
         int safePage = Math.max(0, page);
-        int safeSize = clamp(size, 1, 200);
+        int safeSize = clamp(size, 1, 100000);
+        int start = safePage * safeSize;
 
-        String selector = buildSelector(q, tenant, systemNo, busId, taskId);
+        String window = clamp(minutes, 1, 60 * 24 * 30) + "m";
+        String selector = buildSelector(q, category, nodeName, taskId);
+        long totalElements = toLongOrZero(prometheus
+                .queryScalar("count(max_over_time(msg_task_last_seen_seconds" + selector + "[" + window + "]))"));
+
+        List<Map<String, Object>> content = searchDataRange(q, category, nodeName, taskId, minutes, start, safeSize);
+        return pageOf(content, totalElements);
+    }
+
+    public List<Map<String, Object>> searchDataRange(String q,
+            String category,
+            String nodeName,
+            String taskId,
+            int minutes,
+            int start,
+            int size) {
+        int safeMinutes = clamp(minutes, 1, 60 * 24 * 30);
+        int safeStart = Math.max(0, start);
+        int safeSize = clamp(size, 1, 100000);
+
+        String selector = buildSelector(q, category, nodeName, taskId);
         String window = safeMinutes + "m";
         String lastSeenWindow = "max_over_time(msg_task_last_seen_seconds" + selector + "[" + window + "])";
-        long totalElements = toLongOrZero(prometheus.queryScalar("count(" + lastSeenWindow + ")"));
 
-        long rawLimit = (long) safeSize * (safePage + 1L);
-        int limit = rawLimit > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) rawLimit;
+        int limit = safeStart + safeSize;
         String lastSeenQ = "topk(" + limit + ", " + lastSeenWindow + ")";
-        String countQ = "increase(msg_task_events_total" + selector + "[" + safeMinutes + "m])";
-
         List<PrometheusQueryService.SeriesPoint> lastSeen = prometheus.queryVector(lastSeenQ);
-        List<PrometheusQueryService.SeriesPoint> counts = prometheus.queryVector(countQ);
-
-        Map<String, Long> countByKey = new LinkedHashMap<>();
-        for (PrometheusQueryService.SeriesPoint sp : counts) {
-            countByKey.put(keyOf(sp.getMetric()), toLongOrZero(sp.getValue()));
-        }
 
         lastSeen.sort(Comparator.comparing(PrometheusQueryService.SeriesPoint::getValue,
                 Comparator.nullsLast(Comparator.naturalOrder())).reversed());
 
-        int from = safePage * safeSize;
-        if (from >= lastSeen.size()) {
-            return pageOf(Collections.emptyList(), totalElements);
+        if (safeStart >= lastSeen.size()) {
+            return Collections.emptyList();
         }
-        int to = Math.min(from + safeSize, lastSeen.size());
+        int to = Math.min(safeStart + safeSize, lastSeen.size());
 
-        List<Map<String, Object>> rows = new ArrayList<>(to - from);
-        for (PrometheusQueryService.SeriesPoint sp : lastSeen.subList(from, to)) {
+        List<Map<String, Object>> rows = new ArrayList<>(to - safeStart);
+        for (PrometheusQueryService.SeriesPoint sp : lastSeen.subList(safeStart, to)) {
             Map<String, String> m = sp.getMetric();
             String task = m.getOrDefault("taskId", "unknown");
             String node = m.getOrDefault("nodeName", "unknown");
@@ -66,10 +76,12 @@ public class PrometheusMessageService {
             String system = m.getOrDefault("system", "unknown");
             String ten = m.getOrDefault("tenant", "unknown");
 
-            long lastSeenSec = toLongOrZero(sp.getValue());
+            Instant createdAt = toInstant(sp.getValue());
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("id", task + "-" + node + "-" + result);
-            row.put("createdAt", lastSeenSec == 0 ? null : Instant.ofEpochSecond(lastSeenSec).toString());
+            row.put("id", task + "-" + node + "-" + result + "-" + m.getOrDefault("category", "unknown") + "-"
+                    + m.getOrDefault("system", "unknown") + "-" + m.getOrDefault("workitemId", "") + "-"
+                    + m.getOrDefault("transNo", "") + "-" + m.getOrDefault("eventType", ""));
+            row.put("createdAt", createdAt != null ? createdAt.toString() : null);
             row.put("taskId", task);
             row.put("category", m.getOrDefault("category", "unknown"));
             row.put("tenant", ten);
@@ -78,12 +90,16 @@ public class PrometheusMessageService {
             row.put("result", result);
             row.put("busId", m.getOrDefault("busId", ""));
             row.put("adviseKey", m.getOrDefault("eventType", ""));
-            row.put("count", countByKey.getOrDefault(keyOf(m), 0L));
+            row.put("transNo", m.getOrDefault("transNo", ""));
+            row.put("workitemId", m.getOrDefault("workitemId", ""));
+            row.put("messageType", m.getOrDefault("messageType", ""));
             row.put("labels", m);
+
+            String rawJson = rawStore.get(rawStore.buildLookupKey(m));
+            row.put("rawJson", rawJson);
             rows.add(row);
         }
-
-        return pageOf(rows, totalElements);
+        return rows;
     }
 
     public List<Map<String, Object>> trace(String taskId) {
@@ -91,7 +107,7 @@ public class PrometheusMessageService {
             return Collections.emptyList();
         }
         String selector = "{taskId=\"" + escapeLabelValue(taskId.trim()) + "\"}";
-        String q = "max_over_time(msg_task_last_seen_seconds" + selector + "[15d])";
+        String q = "max_over_time(msg_task_last_seen_seconds" + selector + "[30d])";
         List<PrometheusQueryService.SeriesPoint> lastSeen = prometheus.queryVector(q);
 
         lastSeen.sort(Comparator.comparing(PrometheusQueryService.SeriesPoint::getValue,
@@ -105,25 +121,37 @@ public class PrometheusMessageService {
             String system = m.getOrDefault("system", "unknown");
             String ten = m.getOrDefault("tenant", "unknown");
 
-            long lastSeenSec = toLongOrZero(sp.getValue());
+            Instant createdAt = toInstant(sp.getValue());
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("id", taskId + "-" + node + "-" + result);
-            row.put("createdAt", lastSeenSec == 0 ? null : Instant.ofEpochSecond(lastSeenSec).toString());
+            row.put("id", taskId + "-" + node + "-" + result + "-" + m.getOrDefault("category", "unknown") + "-"
+                    + m.getOrDefault("system", "unknown") + "-" + m.getOrDefault("workitemId", "") + "-"
+                    + m.getOrDefault("transNo", "") + "-" + m.getOrDefault("eventType", ""));
+            row.put("createdAt", createdAt != null ? createdAt.toString() : null);
             row.put("taskId", taskId);
             row.put("tenant", ten);
             row.put("systemNo", system);
+            row.put("category", m.getOrDefault("category", "unknown"));
+            row.put("transNo", m.getOrDefault("transNo", ""));
             row.put("nodeName", node);
             row.put("result", result);
+            row.put("workitemId", m.getOrDefault("workitemId", ""));
+            row.put("messageType", m.getOrDefault("messageType", ""));
+            row.put("adviseKey", m.getOrDefault("eventType", ""));
+            row.put("busId", m.getOrDefault("busId", ""));
             row.put("labels", m);
+
+            // 尝试获取原始 JSON
+            String rawJson = rawStore.get(rawStore.buildLookupKey(m));
+            row.put("rawJson", rawJson);
+
             out.add(row);
         }
         return out;
     }
 
     public Map<String, Object> pendingTasks(String q,
-            String tenant,
-            String systemNo,
-            String busId,
+            String category,
+            String nodeName,
             int minutes,
             int expectedSeconds,
             int size) {
@@ -132,11 +160,11 @@ public class PrometheusMessageService {
         int safeSize = clamp(size, 1, 500);
 
         long nowSec = Math.max(0, System.currentTimeMillis() / 1000);
-        String selector = buildSelector(q, tenant, systemNo, busId, null);
+        String selector = buildSelector(q, category, nodeName, null);
         String window = safeMinutes + "m";
 
-        String startSelector = mergeSelector(selector, "result=\"NEW\"");
-        String doneSelector = mergeSelector(selector, "result!=\"NEW\"");
+        String startSelector = mergeSelector(selector, "result=\"PENDING\"");
+        String doneSelector = mergeSelector(selector, "result!=\"PENDING\"");
 
         String startQ = "max by (taskId,tenant,system,busId,eventType,nodeName) (max_over_time(msg_task_last_seen_seconds"
                 + startSelector + "[" + window + "]))";
@@ -210,16 +238,17 @@ public class PrometheusMessageService {
         return out;
     }
 
-    private static String buildSelector(String q, String tenant, String systemNo, String busId, String taskId) {
+    private static String buildSelector(String q, String category, String nodeName, String taskId) {
         List<String> parts = new ArrayList<>();
-        if (tenant != null && !tenant.isBlank()) {
-            parts.add("tenant=\"" + escapeLabelValue(tenant.trim()) + "\"");
+        if (category != null && !category.isBlank()) {
+            if ("__ALL_TENANTS__".equals(category)) {
+                parts.add("category!~\"state|competence|STATE|COMPETENCE\"");
+            } else {
+                parts.add("category=\"" + escapeLabelValue(category.trim()) + "\"");
+            }
         }
-        if (systemNo != null && !systemNo.isBlank()) {
-            parts.add("system=\"" + escapeLabelValue(systemNo.trim()) + "\"");
-        }
-        if (busId != null && !busId.isBlank()) {
-            parts.add("busId=\"" + escapeLabelValue(busId.trim()) + "\"");
+        if (nodeName != null && !nodeName.isBlank()) {
+            parts.add("nodeName=\"" + escapeLabelValue(nodeName.trim()) + "\"");
         }
         if (taskId != null && !taskId.isBlank()) {
             parts.add("taskId=\"" + escapeLabelValue(taskId.trim()) + "\"");
@@ -244,18 +273,11 @@ public class PrometheusMessageService {
         return "{" + extra + "}";
     }
 
-    private static String keyOf(Map<String, String> m) {
-        return safe(m.get("tenant"))
-                + "|" + safe(m.get("system"))
-                + "|" + safe(m.get("taskId"))
-                + "|" + safe(m.get("nodeName"))
-                + "|" + safe(m.get("result"))
-                + "|" + safe(m.get("busId"))
-                + "|" + safe(m.get("eventType"));
-    }
-
-    private static String safe(String v) {
-        return v == null ? "" : v;
+    private static Instant toInstant(Double v) {
+        if (v == null || Double.isNaN(v) || Double.isInfinite(v) || v <= 0) {
+            return null;
+        }
+        return Instant.ofEpochMilli(Math.round(v * 1000.0));
     }
 
     private static long toLongOrZero(Double v) {
@@ -285,13 +307,6 @@ public class PrometheusMessageService {
 
     private static String escapeLabelValue(String v) {
         return v.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    private static String escapeRegexValue(String v) {
-        return escapeLabelValue(v).replace(".", "\\.").replace("*", "\\*").replace("+", "\\+")
-                .replace("?", "\\?").replace("^", "\\^").replace("$", "\\$")
-                .replace("{", "\\{").replace("}", "\\}").replace("(", "\\(").replace(")", "\\)")
-                .replace("|", "\\|").replace("[", "\\[").replace("]", "\\]");
     }
 
     private static String escapeRegexLiteral(String v) {
